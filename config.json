@@ -1,0 +1,23 @@
+{
+  "access": {
+    "path": "C:/Users/ikerg/Downloads/Prometeo V-20260918T200642Z-1-001/Prometeo V/PROMETEO.mdb",
+    "driver": "{Microsoft Access Driver (*.mdb, *.accdb)}"
+  },
+  "mysql": {
+    "host": "localhost",
+    "port": 3306,
+    "user": "root",
+    "password": "alpha1234",
+    "database": "prometeo_marc_ITT",
+    "charset": "utf8mb4"
+  },
+  "koha_branch_mapping": {
+    "165": "ITT"
+  },
+  "item_status_mapping": {
+    "0": "available",
+    "1": "available",
+    "2": "checkedout",
+    "3": "available"
+  }
+}

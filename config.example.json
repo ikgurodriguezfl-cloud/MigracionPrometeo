@@ -1,0 +1,24 @@
+{
+  "mysql": {
+    "host": "localhost",
+    "port": 3306,
+    "user": "root",
+    "password": "",
+    "database": "prometeo_marc",
+    "charset": "utf8mb4"
+  },
+  "access": {
+    "driver": "{Microsoft Access Driver (*.mdb, *.accdb)}"
+  },
+  "koha_branch_mapping": {
+    "165": "CENTRAL",
+    "166": "SUCURSAL_NORTE",
+    "167": "SUCURSAL_SUR"
+  },
+  "item_status_mapping": {
+    "1": "available",
+    "2": "checkedout",
+    "3": "available",
+    "0": "available"
+  }
+}
