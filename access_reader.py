@@ -2,12 +2,25 @@
 Lectura de base de datos Access (.mdb) de Prometeo.
 Extrae registros de FICHAS y EJEMPLARES y los devuelve como diccionarios.
 """
+import os
 import pyodbc
 from typing import List, Dict, Optional, Iterator
 from datetime import datetime
 
 
 class AccessReader:
+    # Columnas consultadas posteriormente para convertir fichas y ejemplares.
+    CAMPOS_REQUERIDOS = {
+        "FICHAS": (
+            "Ficha_No", "Fecha", "FechaMod", "DatosFijos", "EtiquetasMARC",
+            "TipoMaterial", "ISBN", "Titulo", "Autor", "Clasificacion",
+        ),
+        "EJEMPLARES": (
+            "Ficha_No", "NumAdqui", "FechaIngreso", "Biblioteca",
+            "Volumen", "Ejemplar", "Tomo", "Accesible",
+        ),
+    }
+
     def __init__(self, mdb_path: str, driver: str = "{Microsoft Access Driver (*.mdb, *.accdb)}"):
         self.mdb_path = mdb_path
         self.driver = driver
@@ -39,6 +52,31 @@ class AccessReader:
             return True
         except Exception:
             return False
+
+    def validar_archivo(self) -> List[str]:
+        """Valida extension, existencia, contenido y tablas/campos de la copia."""
+        errores = []
+        extension = os.path.splitext(self.mdb_path)[1].lower()
+        if extension not in {".mdb", ".accdb"}:
+            errores.append("El archivo debe tener extension .mdb o .accdb.")
+        if not os.path.isfile(self.mdb_path):
+            errores.append("El archivo seleccionado no existe o no es un archivo.")
+        elif os.path.getsize(self.mdb_path) == 0:
+            errores.append("El archivo seleccionado esta vacio.")
+
+        if errores:
+            return errores
+
+        cursor = self.conn.cursor()
+        for tabla, campos in self.CAMPOS_REQUERIDOS.items():
+            seleccion = ", ".join(f"[{campo}]" for campo in campos)
+            try:
+                cursor.execute(f"SELECT {seleccion} FROM [{tabla}] WHERE 1=0")
+            except pyodbc.Error as error:
+                errores.append(
+                    f"La tabla {tabla} no contiene la estructura requerida: {error}"
+                )
+        return errores
 
     def leer_fichas(self, limite: Optional[int] = None) -> List[Dict]:
         """
