@@ -75,14 +75,28 @@ class MigracionApp:
 
         self.var_access_path = tk.StringVar(value=self.config.get('access', {}).get('path', ''))
         self.var_access_path.trace_add('write', lambda *_: self._actualizar_info_access())
-        ttk.Entry(lbl_access, textvariable=self.var_access_path, width=80).pack(side='left', padx=5, pady=5, fill='x', expand=True)
-        ttk.Button(lbl_access, text='Examinar...', command=self._seleccionar_access).pack(side='left', padx=5)
-        ttk.Button(lbl_access, text='Probar conexion', command=self._probar_access).pack(side='left', padx=5)
+        fila_archivo = ttk.Frame(lbl_access)
+        fila_archivo.pack(fill='x', padx=5, pady=(5, 0))
+        fila_archivo.columnconfigure(0, weight=1)
+        ttk.Entry(fila_archivo, textvariable=self.var_access_path).grid(
+            row=0, column=0, sticky='ew', padx=(0, 5)
+        )
+        ttk.Button(fila_archivo, text='Examinar...', command=self._seleccionar_access).grid(
+            row=0, column=1, padx=5
+        )
+        ttk.Button(fila_archivo, text='Probar conexion', command=self._probar_access).grid(
+            row=0, column=2, padx=(5, 0)
+        )
 
-        self.lbl_conteo_access = ttk.Label(lbl_access, text='Registros: --')
-        self.lbl_conteo_access.pack(side='right', padx=5, pady=5)
-        self.lbl_info_access = ttk.Label(lbl_access, text='Archivo seleccionado: --')
-        self.lbl_info_access.pack(side='bottom', fill='x', padx=5, pady=(0, 5))
+        fila_info = ttk.Frame(lbl_access)
+        fila_info.pack(fill='x', padx=5, pady=(3, 5))
+        fila_info.columnconfigure(0, weight=1)
+        self.lbl_info_access = ttk.Label(
+            fila_info, text='Archivo seleccionado: --', anchor='w'
+        )
+        self.lbl_info_access.grid(row=0, column=0, sticky='ew', padx=(0, 10))
+        self.lbl_conteo_access = ttk.Label(fila_info, text='Registros: --', anchor='e')
+        self.lbl_conteo_access.grid(row=0, column=1, sticky='e')
         self._actualizar_info_access()
 
         lbl_mysql = ttk.LabelFrame(f, text='Base de datos MySQL (destino MARC21)')
