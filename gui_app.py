@@ -6,15 +6,20 @@ import os
 import threading
 from typing import Optional, Dict, Any, List
 
+from auth import AuthenticationService
 from access_reader import AccessReader
 from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
 
 
 class MigracionApp:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, auth_service: AuthenticationService,
+                 session_token: str, on_logout):
         # Inicializa la ventana, carga la configuracion y prepara el conversor MARC.
         self.root = root
+        self.auth_service = auth_service
+        self.session_token = session_token
+        self.on_logout = on_logout
         self.root.title('Prometeo Migrator - Access a MARC21 (Koha)')
         self.root.geometry('900x650')
         self.root.minsize(800, 600)
@@ -43,6 +48,10 @@ class MigracionApp:
         self._cargar_config_en_ui()
 
     def _crear_interfaz(self):
+        toolbar = ttk.Frame(self.root)
+        toolbar.pack(fill='x', padx=10, pady=(10, 0))
+        ttk.Button(toolbar, text='Cerrar sesion', command=self._cerrar_sesion).pack(side='right')
+
         # La aplicacion se organiza en cuatro pestanas para separar sus tareas.
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill='both', expand=True, padx=10, pady=10)
@@ -256,6 +265,8 @@ class MigracionApp:
         self.txt_status.insert('1.0', json.dumps(status_map, indent=2, ensure_ascii=False))
 
     def _guardar_config(self):
+        if not self._sesion_valida():
+            return
         # Recopila los valores visibles y los persiste como JSON.
         config = {
             'access': {
@@ -301,6 +312,18 @@ class MigracionApp:
         self.txt_log.insert(tk.END, mensaje + '\n')
         self.txt_log.see(tk.END)
         self.root.update_idletasks()
+
+    def _sesion_valida(self) -> bool:
+        try:
+            self.auth_service.require_authenticated(self.session_token)
+            return True
+        except PermissionError as error:
+            messagebox.showerror('Sesion cerrada', str(error))
+            return False
+
+    def _cerrar_sesion(self):
+        self.auth_service.logout(self.session_token)
+        self.on_logout()
 
     def _seleccionar_access(self):
         # Abre el selector de archivos filtrado para copias Access.
@@ -349,6 +372,8 @@ class MigracionApp:
             reader.close()
 
     def _probar_access(self):
+        if not self._sesion_valida():
+            return
         # Comprueba la copia y muestra el total de fichas si la prueba pasa.
         path = self.var_access_path.get().strip()
         if not path:
@@ -373,6 +398,8 @@ class MigracionApp:
             messagebox.showerror('Error', 'No se pudo conectar a Access:\n' + str(e))
 
     def _probar_mysql(self):
+        if not self._sesion_valida():
+            return
         # Comprueba los datos visibles de conexion y verifica las tablas destino.
         config = {
             'host': self.entry_host.get(),
@@ -431,6 +458,8 @@ class MigracionApp:
             return {'total_registros': 0, 'total_ejemplares': 0, 'por_estado': {}}
 
     def _iniciar_migracion(self):
+        if not self._sesion_valida():
+            return
         # Valida el archivo y la configuracion antes de permitir el procesamiento.
         if self.migracion_en_curso:
             messagebox.showwarning('Atencion', 'Ya hay una migracion en curso.')
@@ -610,6 +639,8 @@ class MigracionApp:
         self.btn_ejecutar.config(state='normal')
 
     def _exportar_marcxml(self):
+        if not self._sesion_valida():
+            return
         # Exporta registros almacenados en MySQL dentro de un unico collection XML.
         if not self.mysql_writer:
             # Intentar crear conexión con los valores actuales de la UI
