@@ -4,7 +4,7 @@ from tkinter import ttk, filedialog, messagebox
 import json
 import os
 import threading
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from access_reader import AccessReader
 from marc_converter import MarcConverter
@@ -70,16 +70,20 @@ class MigracionApp:
     def _crear_pestana_conexion(self):
         f = self.frame_conexion
 
-        lbl_access = ttk.LabelFrame(f, text='Base de datos Access (.mdb)')
+        lbl_access = ttk.LabelFrame(f, text='Base de datos Access (.mdb/.accdb)')
         lbl_access.pack(fill='x', padx=10, pady=5)
 
         self.var_access_path = tk.StringVar(value=self.config.get('access', {}).get('path', ''))
+        self.var_access_path.trace_add('write', lambda *_: self._actualizar_info_access())
         ttk.Entry(lbl_access, textvariable=self.var_access_path, width=80).pack(side='left', padx=5, pady=5, fill='x', expand=True)
         ttk.Button(lbl_access, text='Examinar...', command=self._seleccionar_access).pack(side='left', padx=5)
         ttk.Button(lbl_access, text='Probar conexion', command=self._probar_access).pack(side='left', padx=5)
 
         self.lbl_conteo_access = ttk.Label(lbl_access, text='Registros: --')
         self.lbl_conteo_access.pack(side='right', padx=5, pady=5)
+        self.lbl_info_access = ttk.Label(lbl_access, text='Archivo seleccionado: --')
+        self.lbl_info_access.pack(side='bottom', fill='x', padx=5, pady=(0, 5))
+        self._actualizar_info_access()
 
         lbl_mysql = ttk.LabelFrame(f, text='Base de datos MySQL (destino MARC21)')
         lbl_mysql.pack(fill='x', padx=10, pady=5)
@@ -260,18 +264,57 @@ class MigracionApp:
 
     def _seleccionar_access(self):
         path = filedialog.askopenfilename(
-            title='Seleccionar base de datos Access',
-            filetypes=[('Access 2003', '*.mdb'), ('Todos los archivos', '*.*')],
+            title='Seleccionar base de datos Access aprobada',
+            filetypes=[('Bases de datos Access', '*.mdb *.accdb'), ('Todos los archivos', '*.*')],
         )
         if path:
             self.var_access_path.set(path)
 
+    def _actualizar_info_access(self):
+        path = self.var_access_path.get().strip()
+        if not path:
+            self.lbl_info_access.config(text='Archivo seleccionado: --')
+            return
+
+        nombre = os.path.basename(path)
+        if os.path.isfile(path):
+            try:
+                tamano = os.path.getsize(path)
+            except OSError:
+                detalle_tamano = 'no disponible'
+            else:
+                unidades = ('B', 'KB', 'MB', 'GB', 'TB')
+                valor = float(tamano)
+                unidad = unidades[0]
+                for unidad in unidades:
+                    if valor < 1024 or unidad == unidades[-1]:
+                        break
+                    valor /= 1024
+                detalle_tamano = f'{valor:.2f} {unidad}'
+        else:
+            detalle_tamano = 'no disponible'
+
+        self.lbl_info_access.config(
+            text=f'Archivo: {nombre} | Tamaño: {detalle_tamano}'
+        )
+
+    def _validar_archivo_access(self, path: str) -> List[str]:
+        reader = AccessReader(path)
+        try:
+            return reader.validar_archivo()
+        finally:
+            reader.close()
+
     def _probar_access(self):
         path = self.var_access_path.get().strip()
         if not path:
-            messagebox.showwarning('Atencion', 'Seleccione primero el archivo .mdb')
+            messagebox.showwarning('Atencion', 'Seleccione primero un archivo .mdb o .accdb')
             return
         try:
+            errores = self._validar_archivo_access(path)
+            if errores:
+                raise ValueError('\n'.join(errores))
+
             reader = AccessReader(path)
             if reader.test_connection():
                 total = reader.contar_fichas()
@@ -348,7 +391,21 @@ class MigracionApp:
 
         path_access = self.var_access_path.get().strip()
         if not path_access or not os.path.exists(path_access):
-            messagebox.showerror('Error', 'Seleccione un archivo .mdb valido.')
+            messagebox.showerror('Error', 'Seleccione un archivo .mdb o .accdb valido.')
+            return
+
+        try:
+            errores_validacion = self._validar_archivo_access(path_access)
+        except Exception as e:
+            errores_validacion = [f'No se pudo validar el archivo Access: {e}']
+        if errores_validacion:
+            mensaje = '\n'.join(errores_validacion)
+            self.log('[ERROR] Validacion Access: ' + mensaje.replace('\n', ' | '))
+            messagebox.showerror(
+                'Archivo Access no valido',
+                'No se iniciara la migracion porque el archivo no cumple los requisitos:\n\n'
+                + mensaje,
+            )
             return
 
         config_mysql = {
