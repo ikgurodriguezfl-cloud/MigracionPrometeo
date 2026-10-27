@@ -10,13 +10,14 @@ from lotes import ESTADOS, ETAPAS, lotes_de_ejemplo
 
 
 class PanelLotes(ttk.Frame):
-    def __init__(self, parent, listar, politica, iniciar, exportar, conexiones):
+    def __init__(self, parent, listar, politica, iniciar, exportar, conexiones, detener):
         super().__init__(parent, padding=16, style='Panel.TFrame')
         self.listar = listar
         self.politica = politica
         self.iniciar = iniciar
         self.exportar = exportar
         self.conexiones = conexiones
+        self.detener = detener
         self.seleccionado = None
         self.lotes = []
         self.demo = tk.BooleanVar(value=False)
@@ -90,7 +91,7 @@ class PanelLotes(ttk.Frame):
         horizontal = ttk.Scrollbar(listado, orient='horizontal', command=self.tabla.xview)
         horizontal.grid(row=2, column=0, sticky='ew')
         self.tabla.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
-        for estado, color in (('en_espera', '#777d91'), ('en_proceso', '#477bbb'), ('concluido', '#358265'), ('con_incidencias', '#a36d23')):
+        for estado, color in (('en_espera', '#777d91'), ('en_proceso', '#477bbb'), ('concluido', '#358265'), ('con_incidencias', '#a36d23'), ('detenido', '#956c42')):
             self.tabla.tag_configure(estado, foreground=color)
         self.tabla.bind('<<TreeviewSelect>>', self._seleccionar)
         self.sin_lotes = ttk.Label(listado, style='Tarjeta.TLabel', wraplength=430)
@@ -113,8 +114,12 @@ class PanelLotes(ttk.Frame):
         self.siguiente.grid(row=6, column=0, sticky='ew', pady=(0, 12))
         acciones = ttk.Frame(detalle, style='Tarjeta.TFrame')
         acciones.grid(row=7, column=0, sticky='ew')
-        self.btn_iniciar = ttk.Button(acciones, text='Ejecutar migración', command=self._iniciar)
-        self.btn_iniciar.pack(fill='x', pady=3)
+        control = ttk.Frame(acciones, style='Tarjeta.TFrame')
+        control.pack(fill='x', pady=3)
+        self.btn_iniciar = ttk.Button(control, text='Ejecutar migración', command=self._iniciar)
+        self.btn_iniciar.pack(side='left', fill='x', expand=True, padx=(0, 4))
+        self.btn_detener = ttk.Button(control, text='Detener migración', command=self._detener)
+        self.btn_detener.pack(side='left', fill='x', expand=True)
         self.btn_exportar = ttk.Button(acciones, text='Exportar MARCXML del lote', command=self._exportar)
         self.btn_exportar.pack(fill='x', pady=3)
         fila = ttk.Frame(acciones, style='Tarjeta.TFrame')
@@ -197,12 +202,17 @@ class PanelLotes(ttk.Frame):
                 'en_proceso': 'Procesamiento en curso. La exportación se habilita al concluir sin errores.',
                 'concluido': 'Procesamiento finalizado. Revisa el resumen antes de exportar los nuevos registros correctos del lote. Esto no importa a Koha.',
                 'con_incidencias': 'Revisa las incidencias y los registros pendientes. La exportación permanece bloqueada para evitar continuar antes de resolverlas.',
+                'detenido': 'Detenido por el usuario. Se conservaron los avances y quedan registros pendientes. Puedes guardar el resumen; este lote no se reanuda automáticamente.',
             }
             self.siguiente.config(text=pasos[lote.estado])
             self.actualizado.config(text='Última actualización: ' + datetime.fromisoformat(lote.actualizado_en).strftime('%d/%m/%Y %H:%M:%S'))
         politica = self.politica(lote, self.demo.get())
-        for accion, boton in (('iniciar', self.btn_iniciar), ('exportar', self.btn_exportar), ('incidencias', self.btn_incidencias), ('resumen', self.btn_resumen)):
+        for accion, boton in (('iniciar', self.btn_iniciar), ('detener', self.btn_detener), ('exportar', self.btn_exportar), ('incidencias', self.btn_incidencias), ('resumen', self.btn_resumen)):
             boton.configure(state='normal' if politica[accion] else 'disabled')
+        solicitada = politica['detencion_solicitada']
+        self.btn_detener.configure(text='Deteniendo…' if solicitada else 'Detener migración')
+        if solicitada:
+            self.siguiente.configure(text='Detención solicitada. Se terminará la ficha u operación en curso antes de guardar el último avance.')
 
     def _iniciar(self):
         lote = self.lote_actual()
@@ -213,6 +223,11 @@ class PanelLotes(ttk.Frame):
         lote = self.lote_actual()
         if self.politica(lote, self.demo.get())['exportar']:
             self.exportar(lote.id)
+
+    def _detener(self):
+        lote = self.lote_actual()
+        if self.politica(lote, self.demo.get())['detener']:
+            self.detener(lote.id)
 
     def _ventana_texto(self, titulo, contenido):
         ventana = tk.Toplevel(self)

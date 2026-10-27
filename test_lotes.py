@@ -80,6 +80,34 @@ class LotesTests(unittest.TestCase):
         self.assertFalse(acciones_lote(lote, destino_coincide=True)['exportar'])
         self.assertTrue(acciones_lote(lote)['resumen'])
 
+    def test_lote_detenido_conserva_avance_y_no_permita_exportar(self):
+        lote = self.historial.recibir('copia.mdb', 10)
+        lote = self.historial.actualizar(lote.id, estado='detenido', etapa='conversion',
+            correctos=2, omitidos=1, fichas_correctas=[1, 2], evento='Detenido por el usuario.')
+        self.assertEqual((lote.procesados, lote.pendientes, lote.progreso), (3, 7, 30))
+        politica = acciones_lote(lote, fuente_validada=True, destino_coincide=True)
+        self.assertTrue(politica['resumen'])
+        self.assertFalse(politica['iniciar'])
+        self.assertFalse(politica['exportar'])
+        recuperado = HistorialLotes(self.ruta).obtener(lote.id)
+        self.assertEqual(recuperado.estado, 'detenido')
+        self.assertEqual(recuperado.fichas_correctas, [1, 2])
+
+    def test_detener_solo_el_lote_activo_y_una_sola_vez(self):
+        lote = lotes_de_ejemplo()[1]
+        self.assertTrue(acciones_lote(lote, ocupado=True, lote_activo_id=lote.id)['detener'])
+        for cambio in ({'ocupado': False}, {'lote_activo_id': 'OTRO-LOTE'},
+                       {'demostracion': True}, {'detencion_solicitada': True}):
+            opciones = {'ocupado': True, 'lote_activo_id': lote.id, **cambio}
+            self.assertFalse(acciones_lote(lote, **opciones)['detener'])
+        politica = acciones_lote(lote, ocupado=True, lote_activo_id=lote.id, detencion_solicitada=True)
+        self.assertTrue(politica['detencion_solicitada'])
+
+    def test_no_se_marca_detenido_un_lote_que_ya_atendio_todo(self):
+        lote = self.historial.recibir('copia.mdb', 10)
+        with self.assertRaises(ValueError):
+            self.historial.actualizar(lote.id, estado='detenido', etapa='conversion', omitidos=10)
+
     def test_rechaza_credenciales_en_historial(self):
         lote = self.historial.recibir('copia.mdb', 10)
         with self.assertRaises(ValueError):

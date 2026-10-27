@@ -13,6 +13,7 @@ from uuid import uuid4
 ESTADOS = {
     'en_espera': 'En espera', 'en_proceso': 'En proceso',
     'concluido': 'Concluido', 'con_incidencias': 'Con incidencias',
+    'detenido': 'Detenido',
 }
 ETAPAS = {
     'recepcion': 'Respaldo validado', 'conexion': 'Conexión al destino',
@@ -81,6 +82,8 @@ class Lote:
             raise ValueError('El lote no puede concluir con pendientes, errores o sin registros.')
         if self.estado == 'con_incidencias' and not (self.errores or self.incidencias):
             raise ValueError('Falta describir la incidencia del lote.')
+        if self.estado == 'detenido' and (not self.pendientes or self.etapa == 'finalizado'):
+            raise ValueError('Un lote detenido debe conservar registros pendientes y la etapa interrumpida.')
         if not isinstance(self.destino, dict) or set(self.destino) - {'host', 'port', 'database'}:
             raise ValueError('El historial no admite credenciales de conexión.')
         if not isinstance(self.fuente, str) or not self.fuente or not isinstance(self.id, str) or not self.id:
@@ -101,14 +104,18 @@ class Lote:
         self.actividad = self.actividad[-100:]
 
 
-def acciones_lote(lote, ocupado=False, fuente_validada=False, destino_coincide=False, demostracion=False):
+def acciones_lote(lote, ocupado=False, fuente_validada=False, destino_coincide=False, demostracion=False,
+                  lote_activo_id=None, detencion_solicitada=False):
     """Una sola política para botones y comprobaciones antes de ejecutar."""
     real = lote is not None and not demostracion
+    activo = bool(real and ocupado and lote.id == lote_activo_id and lote.estado == 'en_proceso')
     return {
         'iniciar': bool(real and not ocupado and fuente_validada and lote.estado == 'en_espera'),
-        'resumen': bool(lote and lote.estado in ('concluido', 'con_incidencias')),
+        'resumen': bool(lote and lote.estado in ('concluido', 'con_incidencias', 'detenido')),
         'incidencias': bool(lote and (lote.errores or lote.incidencias)),
         'exportar': bool(real and not ocupado and destino_coincide and lote.estado == 'concluido' and lote.correctos),
+        'detener': bool(activo and not detencion_solicitada),
+        'detencion_solicitada': bool(activo and detencion_solicitada),
     }
 
 

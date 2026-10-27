@@ -1,6 +1,7 @@
 """Prueba el enlace del proceso real al panel con conexiones sustituidas."""
 from pathlib import Path
 from queue import Queue
+from threading import Event
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -22,6 +23,7 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.app = MigracionApp.__new__(MigracionApp)
         self.app.historial_lotes = self.historial
         self.app._eventos_ui = Queue()
+        self.app._detencion_solicitada = Event()
         self.app.marc_converter = Mock()
         self.app.marc_converter.record_a_marcxml.return_value = '<record></record>'
         self.app.marc_converter.record_a_iso2709.return_value = b'marc'
@@ -81,6 +83,58 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.assertEqual(lote.estado, 'concluido')
         self.escritor.insertar_registro_marc.assert_not_called()
 
+    def test_detencion_antes_de_iniciar_no_abre_conexiones(self):
+        self.app._detencion_solicitada.set()
+        lote = self.ejecutar()
+        self.assertEqual((lote.estado, lote.procesados, lote.pendientes), ('detenido', 0, 3))
+        self.escritor.connect.assert_not_called()
+        self.app.marc_converter.ficha_a_record.assert_not_called()
+
+    def test_detencion_termina_la_ficha_actual_con_todos_sus_ejemplares(self):
+        self.lector.leer_ejemplares_por_ficha.return_value = {1: [{'Biblioteca': 165}, {'Biblioteca': 166}]}
+        self.escritor.insertar_ejemplar.side_effect = lambda *args, **kwargs: self.app._detencion_solicitada.set()
+        lote = self.ejecutar()
+        self.assertEqual((lote.estado, lote.correctos, lote.ejemplares, lote.pendientes), ('detenido', 1, 2, 2))
+        self.assertEqual(lote.fichas_correctas, [1])
+        self.assertEqual(self.escritor.insertar_ejemplar.call_count, 2)
+        self.escritor.insertar_registro_marc.assert_called_once()
+        self.lector.close.assert_called_once(); self.escritor.close.assert_called_once()
+
+    def test_detencion_durante_conexion_no_lee_ni_convierte_fichas(self):
+        self.escritor.connect.side_effect = self.app._detencion_solicitada.set
+        lote = self.ejecutar()
+        self.assertEqual((lote.estado, lote.etapa, lote.procesados), ('detenido', 'conexion', 0))
+        self.escritor.crear_tablas.assert_not_called()
+        self.lector.leer_fichas.assert_not_called()
+        self.escritor.close.assert_called_once()
+
+    def test_detencion_durante_lectura_no_inicia_conversion(self):
+        def leer(**kwargs):
+            self.app._detencion_solicitada.set()
+            return [{'Ficha_No': 1}, {'Ficha_No': 2}, {'Ficha_No': 3}]
+        self.lector.leer_fichas.side_effect = leer
+        lote = self.ejecutar()
+        self.assertEqual((lote.estado, lote.etapa, lote.procesados), ('detenido', 'lectura', 0))
+        self.app.marc_converter.ficha_a_record.assert_not_called()
+
+    def test_detencion_despues_de_omitir_registro_conserva_su_conteo(self):
+        def existe(identificador):
+            self.app._detencion_solicitada.set()
+            return True
+        self.escritor.registrar_existe.side_effect = existe
+        lote = self.ejecutar()
+        self.assertEqual((lote.estado, lote.omitidos, lote.pendientes), ('detenido', 1, 2))
+        self.assertEqual(lote.errores, 0)
+
+    def test_peticion_en_la_ultima_ficha_no_inventa_pendientes(self):
+        def insertar(identificador, *args):
+            if identificador == 3:
+                self.app._detencion_solicitada.set()
+            return identificador
+        self.escritor.insertar_registro_marc.side_effect = insertar
+        lote = self.ejecutar()
+        self.assertEqual((lote.estado, lote.correctos, lote.pendientes), ('concluido', 3, 0))
+
     def test_exportacion_consulta_solo_las_fichas_correctas_del_lote(self):
         from xml.etree import ElementTree
         self.historial.actualizar(self.lote.id, estado='concluido', etapa='finalizado',
@@ -120,12 +174,53 @@ class InterfazSprint2Tests(unittest.TestCase):
                     panel.seleccionado = lote.id; panel._pintar_detalle()
                     self.assertIn('disabled', panel.btn_iniciar.state())
                     self.assertIn('disabled', panel.btn_exportar.state())
+                    self.assertIn('disabled', panel.btn_detener.state())
                     self.assertEqual('disabled' not in panel.btn_resumen.state(), lote.estado in ('concluido', 'con_incidencias'))
                 panel.filtro.set('En espera'); panel._pintar_tabla()
                 self.assertEqual(len(panel.tabla.get_children()), 1)
                 self.assertEqual(app.historial_lotes.listar(), [])
             finally:
                 if app:
+                    app.cerrar()
+                else:
+                    raiz.destroy()
+
+    def test_botones_detienen_el_lote_activo_y_se_reinician_para_otro_lote(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            raiz = tk.Tk(); raiz.withdraw()
+            app = None
+            try:
+                app = MigracionApp(raiz, HistorialLotes(Path(carpeta) / 'lotes.json'))
+                fuente = Path(carpeta) / 'copia.mdb'; fuente.write_bytes(b'copia de prueba')
+                app.var_access_path.set(str(fuente))
+                app._validar_archivo_access = Mock(return_value=[])
+                lector = Mock(); lector.contar_fichas.return_value = 3
+                app._detencion_solicitada.set()
+                with patch('gui_app.AccessReader', return_value=lector), patch('gui_app.threading.Thread'):
+                    app._iniciar_migracion()
+                self.assertFalse(app._detencion_solicitada.is_set())
+                self.assertNotIn('disabled', app.btn_detener.state())
+                self.assertNotIn('disabled', app.panel_lotes.btn_detener.state())
+                app.panel_lotes.btn_detener.invoke()
+                self.assertTrue(app._detencion_solicitada.is_set())
+                self.assertIn('disabled', app.btn_detener.state())
+                self.assertIn('disabled', app.panel_lotes.btn_detener.state())
+                self.assertEqual(app.btn_detener.cget('text'), 'Deteniendo…')
+                self.assertIn('Detención solicitada', app.panel_lotes.siguiente.cget('text'))
+                app.historial_lotes.actualizar(app._lote_actual_id, estado='detenido', evento='Detenido en prueba.')
+                app._finalizar_migracion()
+                self.assertIn('disabled', app.btn_detener.state())
+                self.assertIn('disabled', app.panel_lotes.btn_exportar.state())
+                self.assertNotIn('disabled', app.panel_lotes.btn_resumen.state())
+                with patch('gui_app.AccessReader', return_value=lector), patch('gui_app.threading.Thread'):
+                    app._iniciar_migracion()
+                self.assertFalse(app._detencion_solicitada.is_set())
+                self.assertNotIn('disabled', app.btn_detener.state())
+                app.btn_detener.invoke()
+                self.assertTrue(app._detencion_solicitada.is_set())
+            finally:
+                if app:
+                    app.migracion_en_curso = False
                     app.cerrar()
                 else:
                     raiz.destroy()

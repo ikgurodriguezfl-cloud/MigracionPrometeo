@@ -15,6 +15,10 @@ from lotes import HistorialLotes, acciones_lote
 from panel_lotes import PanelLotes
 
 
+class _DetencionSolicitada(Exception):
+    """Señal interna para terminar entre operaciones, sin cortar una ficha."""
+
+
 class MigracionApp:
     def __init__(self, root: tk.Tk, historial_lotes=None):
         # Inicializa la ventana, carga la configuracion y prepara el conversor MARC.
@@ -44,6 +48,7 @@ class MigracionApp:
             holdingbranch=self.var_holdingbranch.get(),
         )
         self.migracion_en_curso = False
+        self._detencion_solicitada = threading.Event()
         self.historial_lotes = historial_lotes if historial_lotes is not None else HistorialLotes()
         self._lote_actual_id = None
         self._validacion_access = None
@@ -74,6 +79,7 @@ class MigracionApp:
             notebook, listar=self.historial_lotes.listar, politica=self._politica_lote,
             iniciar=self._iniciar_desde_panel, exportar=self._exportar_marcxml,
             conexiones=lambda: notebook.select(self.frame_conexion),
+            detener=self._solicitar_detencion,
         )
         notebook.add(self.panel_lotes, text='Inicio · Lotes')
 
@@ -174,6 +180,8 @@ class MigracionApp:
         # Ejecuta la migracion validada o exporta los registros MARCXML guardados.
         self.btn_ejecutar = ttk.Button(btn_frame, text='Ejecutar migracion', command=self._iniciar_migracion)
         self.btn_ejecutar.pack(side='left', padx=5)
+        self.btn_detener = ttk.Button(btn_frame, text='Detener migración', command=self._solicitar_detencion, state='disabled')
+        self.btn_detener.pack(side='left', padx=5)
         self.btn_exportar = ttk.Button(btn_frame, text='Exportar MARCXML del lote', command=self._exportar_marcxml)
         self.btn_exportar.pack(side='left', padx=5)
 
@@ -370,7 +378,8 @@ class MigracionApp:
                         and os.path.normcase(os.path.abspath(lote.fuente)) == firma[0])
         destino = self._destino_actual() if hasattr(self, 'entry_host') else {}
         politica = acciones_lote(lote, ocupado=self.migracion_en_curso, fuente_validada=validado,
-                                 destino_coincide=bool(lote and lote.destino == destino), demostracion=demostracion)
+                                 destino_coincide=bool(lote and lote.destino == destino), demostracion=demostracion,
+                                 lote_activo_id=self._lote_actual_id, detencion_solicitada=self._detencion_solicitada.is_set())
         if self.historial_lotes.solo_lectura:
             politica['iniciar'] = False
         return politica
@@ -382,6 +391,19 @@ class MigracionApp:
         lote = self.historial_lotes.obtener(self._lote_actual_id)
         self.btn_exportar.configure(state='normal' if self._politica_lote(lote)['exportar'] else 'disabled')
         self.btn_ejecutar.configure(state='disabled' if self.migracion_en_curso or self.historial_lotes.solo_lectura else 'normal')
+        politica = self._politica_lote(lote)
+        self.btn_detener.configure(state='normal' if politica['detener'] else 'disabled',
+                                  text='Deteniendo…' if politica['detencion_solicitada'] else 'Detener migración')
+
+    def _solicitar_detencion(self, identificador=None):
+        identificador = identificador or self._lote_actual_id
+        lote = self.historial_lotes.obtener(identificador)
+        if not self._politica_lote(lote)['detener']:
+            return
+        self._detencion_solicitada.set()
+        self.log(f'Lote {identificador}: detención solicitada por el usuario.')
+        self.lbl_estado.configure(text='Detención solicitada. Terminando la ficha u operación en curso…')
+        self._actualizar_panel()
 
     def _iniciar_desde_panel(self, identificador):
         lote = self.historial_lotes.obtener(identificador)
@@ -393,7 +415,7 @@ class MigracionApp:
 
     def cerrar(self):
         if self.migracion_en_curso:
-            messagebox.showwarning('Migración en curso', 'Espera a que termine el proceso antes de cerrar la aplicación.')
+            messagebox.showwarning('Migración en curso', 'Pulsa Detener migración y espera a que termine la operación en curso antes de cerrar.')
             return
         self._cerrando = True
         self.root.after_cancel(self._after_ui)
@@ -641,6 +663,7 @@ class MigracionApp:
             messagebox.showerror('No se pudo registrar el lote', str(exc))
             return
         self.migracion_en_curso = True
+        self._detencion_solicitada.clear()
         # Deshabilita el boton durante el trabajo y deja el progreso listo.
         self.btn_ejecutar.config(state='disabled')
         self.progress['value'] = 0
@@ -685,23 +708,35 @@ class MigracionApp:
                 fichas_correctas=fichas_correctas, incidencias=incidencias[-100:], **extra)
             self._publicar_ui(self._mostrar_avance_lote, lote_id)
 
+        def comprobar_detencion():
+            if self._detencion_solicitada.is_set():
+                raise _DetencionSolicitada()
+
         try:
+            comprobar_detencion()
             reader = AccessReader(path_access)
             # Una conexión propia evita compartir el destino entre el hilo y la UI.
             writer = MySQLWriter(config_mysql)
+            comprobar_detencion()
             writer.connect()
+            comprobar_detencion()
             writer.crear_tablas()
+            comprobar_detencion()
             guardar_avance(etapa='lectura', evento='Destino conectado. Leyendo fichas del respaldo.')
             lote = self.historial_lotes.obtener(lote_id)
-            if reader.contar_fichas() != lote.total_recibidos:
+            total_origen = reader.contar_fichas()
+            comprobar_detencion()
+            if total_origen != lote.total_recibidos:
                 raise ValueError('El respaldo cambió después de validarlo. Revisa la copia y vuelve a validarla.')
             total_fichas = lote.total_objetivo
             self.log(f'Lote {lote_id}: {total_fichas} fichas a procesar de {lote.total_recibidos} recibidas.')
             fichas = reader.leer_fichas(limite=limite if limite > 0 else None)
+            comprobar_detencion()
             if len(fichas) != total_fichas:
                 raise ValueError('El número de fichas leídas no coincide con el alcance del lote.')
             guardar_avance(etapa='conversion', evento='Convirtiendo fichas a MARC21 y guardando ejemplares.')
             for idx, ficha in enumerate(fichas, start=1):
+                comprobar_detencion()
                 id_ficha = None
                 try:
                     id_ficha = int(ficha['Ficha_No'])
@@ -743,6 +778,21 @@ class MigracionApp:
             self._publicar_ui(messagebox.showwarning if cont_err else messagebox.showinfo,
                 'Lote con incidencias' if cont_err else 'Lote concluido',
                 f'Correctos: {cont_ok}\nOmitidos: {cont_omitidos}\nErrores: {cont_err}\nEjemplares: {cont_ejemplares}')
+        except _DetencionSolicitada:
+            try:
+                lote = self.historial_lotes.obtener(lote_id)
+                pendientes = lote.total_objetivo - cont_ok - cont_omitidos - cont_err
+                guardar_avance(estado='detenido', evento=(f'Detenido por el usuario. Correctos: {cont_ok}; '
+                    f'omitidos: {cont_omitidos}; errores: {cont_err}; pendientes: {pendientes}.'))
+                self.log(f'Lote {lote_id} detenido. Se conservaron los avances; pendientes: {pendientes}.')
+                self._publicar_ui(self._finalizar_migracion)
+                self._publicar_ui(messagebox.showinfo, 'Migración detenida',
+                    f'Se conservaron los avances guardados.\nCorrectos: {cont_ok}\nOmitidos: {cont_omitidos}'
+                    f'\nErrores: {cont_err}\nPendientes: {pendientes}\nLa exportación de este lote queda bloqueada.')
+            except (OSError, ValueError) as exc:
+                self.log('[ERROR] No se pudo guardar la detención del lote: ' + mensaje_seguro(exc))
+                self._publicar_ui(self._finalizar_migracion)
+                self._publicar_ui(messagebox.showerror, 'No se pudo guardar la detención', mensaje_seguro(exc))
         except Exception as exc:
             mensaje = mensaje_seguro(exc)
             incidencias.append({'referencia': 'Ejecución', 'mensaje': mensaje})
@@ -766,8 +816,10 @@ class MigracionApp:
         if lote is None:
             return
         self.progress['value'] = lote.progreso
-        self.lbl_estado.config(text=f'{lote.id}: {lote.procesados}/{lote.total_objetivo} · ' +
-                              ('Con incidencias' if lote.estado == 'con_incidencias' else 'Concluido' if lote.estado == 'concluido' else 'En proceso'))
+        estado = {'con_incidencias': 'Con incidencias', 'concluido': 'Concluido', 'detenido': 'Detenido'}.get(lote.estado, 'En proceso')
+        if lote.estado == 'en_proceso' and self._detencion_solicitada.is_set():
+            estado = 'Deteniendo al terminar la ficha u operación en curso…'
+        self.lbl_estado.config(text=f'{lote.id}: {lote.procesados}/{lote.total_objetivo} · {estado}')
         self.lbl_stats.config(text=f'Correctos: {lote.correctos} | Omitidos: {lote.omitidos} | Errores: {lote.errores} | Ejemplares: {lote.ejemplares}')
         self._actualizar_panel()
 
