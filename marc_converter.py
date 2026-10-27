@@ -10,15 +10,56 @@ from access_reader import formatear_fecha_marc
 class MarcConverter:
     """Construye registros MARC21 validos para Koha."""
 
-    def __init__(self, agencia_catalogo: str = 'MX-Prometeo', idioma_default: str = 'spa'):
+    def __init__(self, agencia_catalogo: str = 'MX-Prometeo', idioma_default: str = 'spa',
+                 item_type_bib: str = 'LIBR0', item_type_item: str = 'LIBR0',
+                 homebranch: str = 'ITT', holdingbranch: str = 'ITT'):
         self.agencia_catalogo = agencia_catalogo
         self.idioma_default = idioma_default
+        self.item_type_bib = item_type_bib
+        self.item_type_item = item_type_item
+        self.homebranch = homebranch
+        self.holdingbranch = holdingbranch
 
     def _limpiar(self, valor) -> Optional[str]:
         if valor is None:
             return None
         s = str(valor).strip()
         return s if s else None
+
+    def _generar_008(self, ficha: Dict) -> str:
+        """Genera un campo 008 de 40 caracteres basico para Koha."""
+        campos = list(' ' * 40)
+
+        fecha = ficha.get('Fecha')
+        anio = '0000'
+        if fecha is not None:
+            try:
+                anio = str(fecha.year)
+                if len(anio) != 4:
+                    anio = '0000'
+            except Exception:
+                anio = '0000'
+
+        # 0-5: Fecha de ingreso (YYMMDD) - usamos 000000 por defecto
+        campos[0:6] = list('000000')
+        # 6: Tipo de fecha (s = fecha unica)
+        campos[6] = 's'
+        # 7-10: Fecha de publicacion (Date 1)
+        campos[7:11] = list(anio)
+        # 11-14: Fecha de publicacion fin (Date 2) - espacios
+        # 15: Tipo de publicacion - espacio
+        # 16-17: espacios
+        # 18-19: Pais de publicacion (mx = Mexico)
+        campos[18:20] = list('mx')
+        # 20: espacio
+        # 21-23: Idioma (spa)
+        campos[21:24] = list('spa')
+        # 24-28: espacios
+        # 29: Forma de elemento (b = monografia)
+        campos[29] = 'b'
+        # 30-39: espacios
+
+        return ''.join(campos)
 
     def ficha_a_record(self, ficha: Dict, ejemplares: List[Dict],
                        branch_mapping: Optional[Dict[str, str]] = None,
@@ -35,7 +76,8 @@ class MarcConverter:
             branch_mapping = {}
 
         record = Record()
-        record.leader = '00000nam a2200000 a 4500'
+        # Leader para monografia (libro)
+        record.leader = '00000cam a2200000 a 4500'
 
         ficha_no = str(ficha.get('Ficha_No', ''))
 
@@ -47,6 +89,9 @@ class MarcConverter:
         fecha = ficha.get('Fecha')
         dt = fecha_mod or fecha or datetime.now()
         record.add_field(Field(tag='005', data=formatear_fecha_marc(dt)))
+
+        # 008 - Fecha de publicacion y características fisicas
+        record.add_field(Field(tag='008', data=self._generar_008(ficha)))
 
         # 040 - Agencia catalogadora
         record.add_field(Field(
@@ -92,7 +137,7 @@ class MarcConverter:
                 subfields=[Subfield('a', autor)],
             ))
 
-        # 245 - Titulo principal
+        # 245 - Titulo principal (obligatorio en Koha)
         titulo = self._limpiar(ficha.get('Titulo'))
         if titulo:
             subfields_245 = [Subfield('a', titulo)]
@@ -104,29 +149,39 @@ class MarcConverter:
                 subfields=subfields_245,
             ))
 
+        # 942 - Tipo de ítem bibliográfico (requerido por Koha)
+        record.add_field(Field(
+            tag='942',
+            indicators=[' ', ' '],
+            subfields=[Subfield('c', self.item_type_bib)],
+        ))
+
         # --- Ejemplares -> Campo 952 (Items de Koha) ---
         for ej in ejemplares:
             subfields_952 = []
 
-            # $a = branchcode
-            biblioteca = ej.get('Biblioteca')
-            branch_code = ''
-            if biblioteca is not None:
-                bc = str(biblioteca)
-                branch_code = branch_mapping.get(bc, bc) if branch_mapping else bc
-            if branch_code:
-                subfields_952.append(Subfield('a', branch_code))
+            # $a = Homebranch (biblioteca de origen)
+            if self.homebranch:
+                subfields_952.append(Subfield('a', self.homebranch))
 
-            # $i = itemcallnumber (signatura/clasificacion)
-            if clasificacion:
-                subfields_952.append(Subfield('i', clasificacion))
+            # $b = Holdingbranch (biblioteca actual donde esta fisicamente)
+            if self.holdingbranch:
+                subfields_952.append(Subfield('b', self.holdingbranch))
 
-            # $o = barcode / numero de adquisicion
+            # $y = Tipo de ítem del ejemplar (reglas de prestamo)
+            if self.item_type_item:
+                subfields_952.append(Subfield('y', self.item_type_item))
+
+            # $p = Codigo de barras (NumAdqui) - indispensable para prestamos
             num_adqui = self._limpiar(ej.get('NumAdqui'))
             if num_adqui:
-                subfields_952.append(Subfield('o', num_adqui))
+                subfields_952.append(Subfield('p', num_adqui))
 
-            # $z = itemstatus
+            # $o = Signatura topografica / Call number (clasificacion)
+            if clasificacion:
+                subfields_952.append(Subfield('o', clasificacion))
+
+            # $z = Estado del ítem (opcional pero util)
             accesible = ej.get('Accesible')
             if accesible is not None:
                 estado = str(accesible)
@@ -134,7 +189,7 @@ class MarcConverter:
                     estado = status_mapping[estado]
                 subfields_952.append(Subfield('z', estado))
 
-            # $c = collection (volumen/tomo)
+            # $c = Coleccion (volumen/tomo) opcional
             volumen = ej.get('Volumen')
             tomo = ej.get('Tomo')
             partes_c = []

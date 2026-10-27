@@ -23,7 +23,19 @@ class MigracionApp:
 
         self.access_reader: Optional[AccessReader] = None
         self.mysql_writer: Optional[MySQLWriter] = None
-        self.marc_converter = MarcConverter()
+
+        # Valores por defecto para Koha (942 y 952)
+        self.var_item_type_bib = tk.StringVar(value=self.config.get('item_type_bib', 'LIBR0'))
+        self.var_item_type_item = tk.StringVar(value=self.config.get('item_type_item', 'LIBR0'))
+        self.var_homebranch = tk.StringVar(value=self.config.get('homebranch', 'ITT'))
+        self.var_holdingbranch = tk.StringVar(value=self.config.get('holdingbranch', 'ITT'))
+
+        self.marc_converter = MarcConverter(
+            item_type_bib=self.var_item_type_bib.get(),
+            item_type_item=self.var_item_type_item.get(),
+            homebranch=self.var_homebranch.get(),
+            holdingbranch=self.var_holdingbranch.get(),
+        )
         self.migracion_en_curso = False
 
         self._crear_interfaz()
@@ -141,6 +153,17 @@ class MigracionApp:
         ejemplo_status = json.dumps(self.config.get('item_status_mapping', {}), indent=2, ensure_ascii=False)
         self.txt_status.insert('1.0', ejemplo_status)
 
+        lbl_tipos = ttk.LabelFrame(f, text='Valores por defecto para Koha (942 y 952)')
+        lbl_tipos.pack(fill='x', padx=10, pady=5)
+
+        grid_tipos = ttk.Frame(lbl_tipos)
+        grid_tipos.pack(fill='x', padx=5, pady=5)
+
+        self.entry_item_type_bib = self._campo(grid_tipos, 0, 0, '942$c - Tipo ítem bibliográfico:', self.var_item_type_bib.get(), ancho=12)
+        self.entry_item_type_item = self._campo(grid_tipos, 0, 2, '952$y - Tipo ítem ejemplar:', self.var_item_type_item.get(), ancho=12)
+        self.entry_homebranch = self._campo(grid_tipos, 1, 0, '952$a - Homebranch:', self.var_homebranch.get(), ancho=12)
+        self.entry_holdingbranch = self._campo(grid_tipos, 1, 2, '952$b - Holdingbranch:', self.var_holdingbranch.get(), ancho=12)
+
         ttk.Button(f, text='Guardar configuracion', command=self._guardar_config).pack(pady=10)
 
     def _crear_pestana_log(self):
@@ -165,6 +188,11 @@ class MigracionApp:
         self.entry_user.set(self.config.get('mysql', {}).get('user', 'root'))
         self.entry_pass.set(self.config.get('mysql', {}).get('password', ''))
         self.entry_db.set(self.config.get('mysql', {}).get('database', 'prometeo_marc'))
+
+        self.var_item_type_bib.set(self.config.get('item_type_bib', 'LIBR0'))
+        self.var_item_type_item.set(self.config.get('item_type_item', 'LIBR0'))
+        self.var_homebranch.set(self.config.get('homebranch', 'ITT'))
+        self.var_holdingbranch.set(self.config.get('holdingbranch', 'ITT'))
 
         # Inicializar mapeos por defecto si no hay configuracion guardada
         branch_map = self.config.get('koha_branch_mapping', {})
@@ -202,6 +230,10 @@ class MigracionApp:
             },
             'koha_branch_mapping': self._parsear_json_texto(self.txt_mapeo.get('1.0', tk.END), {}),
             'item_status_mapping': self._parsear_json_texto(self.txt_status.get('1.0', tk.END), {}),
+            'item_type_bib': self.entry_item_type_bib.get(),
+            'item_type_item': self.entry_item_type_item.get(),
+            'homebranch': self.entry_homebranch.get(),
+            'holdingbranch': self.entry_holdingbranch.get(),
         }
         try:
             with open(self.config_path, 'w', encoding='utf-8') as f:
@@ -345,6 +377,19 @@ class MigracionApp:
         if not branch_mapping:
             # Se usa el código de Access directamente como código de sucursal en Koha
             branch_mapping = {}
+
+        item_type_bib = self.entry_item_type_bib.get() or 'LIBR0'
+        item_type_item = self.entry_item_type_item.get() or 'LIBR0'
+        homebranch = self.entry_homebranch.get() or 'ITT'
+        holdingbranch = self.entry_holdingbranch.get() or 'ITT'
+
+        # Actualizar el conversor con los valores actuales
+        self.marc_converter = MarcConverter(
+            item_type_bib=item_type_bib,
+            item_type_item=item_type_item,
+            homebranch=homebranch,
+            holdingbranch=holdingbranch,
+        )
 
         self.migracion_en_curso = True
         self.btn_ejecutar.config(state='disabled')
