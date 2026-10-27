@@ -9,6 +9,7 @@ from datetime import datetime
 
 
 class AccessReader:
+    # Columnas consultadas posteriormente para convertir fichas y ejemplares.
     CAMPOS_REQUERIDOS = {
         "FICHAS": (
             "Ficha_No", "Fecha", "FechaMod", "DatosFijos", "EtiquetasMARC",
@@ -53,7 +54,7 @@ class AccessReader:
             return False
 
     def validar_archivo(self) -> List[str]:
-        """Comprueba el formato, que el archivo exista y la estructura requerida."""
+        """Valida extension, existencia, contenido y tablas/campos de la copia."""
         errores = []
         extension = os.path.splitext(self.mdb_path)[1].lower()
         if extension not in {".mdb", ".accdb"}:
