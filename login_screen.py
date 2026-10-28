@@ -4,6 +4,17 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from auth import AuthenticationService
 
+# Tokens de diseno alineados con el panel principal (panel_lotes.py).
+FONDO_PANEL = '#f5f6fa'
+BLANCO = '#ffffff'
+TEXTO_TITULO = '#29283e'
+TEXTO_MUTED = '#777d91'
+TEXTO_CARD = '#6f7589'
+GUINDA = '#6d0c2e'      # color principal (guinda)
+GUINDA_CLARO = '#8e2a50'  # hover / active del boton principal
+FRIO = '#ece8f6'
+BORDE_CAMPO = '#d9d7ea'
+
 
 class LoginScreen:
     def __init__(self, root: tk.Tk, auth_service: AuthenticationService, on_login_success):
@@ -12,31 +23,47 @@ class LoginScreen:
         self.on_login_success = on_login_success
 
         self.root.title('Prometeo Migrator - Inicio de sesion')
-        self.root.geometry('430x360')
+        self.root.geometry('430x560')
+        self.root.minsize(430, 560)
         self.root.resizable(False, False)
+        self.root.configure(background=FONDO_PANEL)
         self.modo = 'login'
 
         self._crear_interfaz()
 
     def _crear_interfaz(self):
-        container = ttk.Frame(self.root, padding='40 40 40 40')
-        container.pack(expand=True, fill='both')
+        # Fondo de pantalla uniforme (gris panel del sistema).
+        contenedor = tk.Frame(self.root, bg=FONDO_PANEL)
+        contenedor.pack(expand=True, fill='both')
 
-        self.lbl_titulo = ttk.Label(
-            container,
+        # Caja blanca que encierra todo el formulario.
+        self.tarjeta = tk.Frame(contenedor, bg=BLANCO)
+        self.tarjeta.pack(expand=True, fill='both', padx=70, pady=70)
+
+        # Contenido centrado dentro de la caja blanca, con respiro respecto a los bordes.
+        interior = tk.Frame(self.tarjeta, bg=BLANCO)
+        interior.pack(expand=True, fill='both', padx=30, pady=30)
+
+        self.lbl_titulo = tk.Label(
+            interior,
             text='Prometeo Migrator',
-            font=('Segoe UI', 16, 'bold')
+            font=('Segoe UI', 22, 'bold'),
+            fg=TEXTO_TITULO,
+            bg=BLANCO,
         )
-        self.lbl_titulo.pack(pady=(0, 10))
+        self.lbl_titulo.pack(pady=(0, 8))
 
-        self.lbl_sub = ttk.Label(
-            container,
-            text='Sistema de migracion Access a MARC21 (Koha)'
+        self.lbl_sub = tk.Label(
+            interior,
+            text='Sistema de migracion a MARC21',
+            font=('Segoe UI', 10),
+            fg=TEXTO_MUTED,
+            bg=BLANCO,
         )
-        self.lbl_sub.pack(pady=(0, 20))
+        self.lbl_sub.pack(pady=(0, 22))
 
-        self.form_frame = ttk.Frame(container)
-        self.form_frame.pack(fill='x')
+        self.form_frame = tk.Frame(interior, bg=BLANCO)
+        self.form_frame.pack(fill='x', pady=22)
 
         self.entry_usuario = None
         self.entry_contrasena = None
@@ -47,11 +74,31 @@ class LoginScreen:
         self.root.bind('<Return>', lambda e: self._accion_enter())
 
     def _crear_campo(self, texto, show=None):
-        frame = ttk.Frame(self.form_frame)
-        frame.pack(fill='x', pady=5)
-        ttk.Label(frame, text=texto).pack(side='left')
-        entry = ttk.Entry(frame, width=30, show=show)
-        entry.pack(side='right', fill='x', expand=True, padx=(10, 0))
+        frame = tk.Frame(self.form_frame, bg=BLANCO)
+        frame.pack(fill='x', pady=8)
+        etiqueta = tk.Label(
+            frame,
+            text=texto,
+            font=('Segoe UI', 9),
+            fg=TEXTO_CARD,
+            bg=BLANCO,
+            anchor='w',
+        )
+        etiqueta.pack(fill='x', pady=(0, 4))
+        entry = tk.Entry(
+            frame,
+            show=show,
+            font=('Segoe UI', 10),
+            bg=BLANCO,
+            fg=TEXTO_TITULO,
+            insertbackground=TEXTO_TITULO,
+            highlightthickness=1,
+            highlightbackground=BORDE_CAMPO,
+            relief='flat',
+        )
+        entry.pack(fill='x')
+        entry.bind('<FocusIn>', lambda evento: entry.config(highlightbackground=GUINDA))
+        entry.bind('<FocusOut>', lambda evento: entry.config(highlightbackground=BORDE_CAMPO))
         return entry
 
     def _limpiar_formulario(self):
@@ -60,14 +107,37 @@ class LoginScreen:
 
     def _crear_botones(self, texto_principal, comando_principal,
                        texto_secundario, comando_secundario):
-        self.btn_principal = ttk.Button(
-            self.form_frame, text=texto_principal, command=comando_principal
+        self.btn_principal = tk.Button(
+            self.form_frame,
+            text=texto_principal,
+            command=lambda: comando_principal(),
+            bg=GUINDA,
+            fg=BLANCO,
+            activebackground=GUINDA_CLARO,
+            activeforeground=BLANCO,
+            relief='flat',
+            padx=24,
+            pady=8,
+            font=('Segoe UI', 10, 'bold'),
+            cursor='hand2',
         )
-        self.btn_principal.pack(pady=(20, 8), ipadx=20, ipady=5)
-        self.btn_secundario = ttk.Button(
-            self.form_frame, text=texto_secundario, command=comando_secundario
+        self.btn_principal.pack(fill='x', pady=(16, 6))
+
+        self.btn_secundario = tk.Button(
+            self.form_frame,
+            text=texto_secundario,
+            command=lambda: comando_secundario(),
+            bg=BLANCO,
+            fg=GUINDA,
+            activebackground=FRIO,
+            activeforeground=GUINDA_CLARO,
+            relief='flat',
+            padx=24,
+            pady=6,
+            font=('Segoe UI', 10),
+            cursor='hand2',
         )
-        self.btn_secundario.pack()
+        self.btn_secundario.pack(fill='x', pady=(0, 4))
 
     def _mostrar_login(self):
         self.modo = 'login'

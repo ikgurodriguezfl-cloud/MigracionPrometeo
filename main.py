@@ -21,6 +21,9 @@ def main():
             widget.destroy()
 
         root.title('Prometeo Migrator - Inicio de sesion')
+        root.geometry('430x560')
+        root.minsize(430, 560)
+        root.resizable(False, False)
         try:
             LoginScreen(root, auth_service=auth_service, on_login_success=ir_a_principal)
         except TypeError as error:
