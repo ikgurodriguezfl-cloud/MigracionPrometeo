@@ -154,7 +154,8 @@ class MarcConverter:
         nombre_fuente = descriptor.get('source')
         if nombre_fuente is None:
             return None
-        datos = ejemplar if ejemplar is not None else ficha
+        datos = (ficha if descriptor.get('scope') == 'ficha'
+                 else ejemplar if ejemplar is not None else ficha)
         valor = self._valor_fuente(nombre_fuente, datos, descriptor, regla, incidencias)
         if valor is None:
             return None

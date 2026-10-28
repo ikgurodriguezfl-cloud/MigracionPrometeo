@@ -225,6 +225,7 @@
           {
             "code": "o",
             "source": "Clasificacion",
+            "scope": "ficha",
             "transform": "text",
             "on_missing": "omit"
           },
