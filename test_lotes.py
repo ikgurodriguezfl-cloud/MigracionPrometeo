@@ -27,6 +27,17 @@ class LotesTests(unittest.TestCase):
         self.assertEqual(recargado.total_recibidos, 120)
         self.assertIn('Poesía', recargado.fuente)
 
+    def test_persiste_version_y_huella_del_mapeo_marc(self):
+        lote = self.historial.recibir('mapeo.mdb', 1)
+        huella = 'a' * 64
+        self.historial.actualizar(
+            lote.id, version_mapeo='1.0', huella_mapeo=huella)
+
+        recargado = HistorialLotes(self.ruta).obtener(lote.id)
+
+        self.assertEqual(recargado.version_mapeo, '1.0')
+        self.assertEqual(recargado.huella_mapeo, huella)
+
     def test_limited_recibidos_no_se_confunde_con_alcance(self):
         lote = self.historial.recibir('copia.mdb', 100)
         lote = self.historial.actualizar(lote.id, estado='en_proceso', etapa='conversion', total_objetivo=10,

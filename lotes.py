@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 from threading import RLock
+from typing import Optional
 from uuid import uuid4
 
 
@@ -38,6 +39,8 @@ class Lote:
     total_recibidos: int
     total_objetivo: int
     destino: dict = field(default_factory=dict)
+    version_mapeo: Optional[str] = None
+    huella_mapeo: Optional[str] = None
     estado: str = 'en_espera'
     etapa: str = 'recepcion'
     correctos: int = 0
@@ -86,6 +89,15 @@ class Lote:
             raise ValueError('Un lote detenido debe conservar registros pendientes y la etapa interrumpida.')
         if not isinstance(self.destino, dict) or set(self.destino) - {'host', 'port', 'database'}:
             raise ValueError('El historial no admite credenciales de conexión.')
+        if ((self.version_mapeo is None) != (self.huella_mapeo is None)
+                or (self.version_mapeo is not None
+                    and (not isinstance(self.version_mapeo, str) or not self.version_mapeo.strip()))
+                or (self.huella_mapeo is not None
+                    and (not isinstance(self.huella_mapeo, str)
+                         or len(self.huella_mapeo) != 64
+                         or any(caracter not in '0123456789abcdef'
+                                for caracter in self.huella_mapeo)))):
+            raise ValueError('La versión y huella del mapeo deben ser válidas y registrarse juntas.')
         if not isinstance(self.fuente, str) or not self.fuente or not isinstance(self.id, str) or not self.id:
             raise ValueError('El lote necesita identificador y fuente.')
         for campo in ('creado_en', 'actualizado_en'):
@@ -196,7 +208,9 @@ class HistorialLotes:
             return copy.deepcopy(lote)
 
     def actualizar(self, identificador, **cambios):
-        permitidos = {'estado', 'etapa', 'total_objetivo', 'destino', 'correctos', 'omitidos', 'errores', 'ejemplares', 'fichas_correctas', 'incidencias'}
+        permitidos = {'estado', 'etapa', 'total_objetivo', 'destino', 'version_mapeo',
+                      'huella_mapeo', 'correctos', 'omitidos', 'errores', 'ejemplares',
+                      'fichas_correctas', 'incidencias'}
         mensaje = cambios.pop('evento', None)
         if set(cambios) - permitidos:
             raise ValueError('Se intentó cambiar un campo no permitido del lote.')

@@ -56,6 +56,19 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.assertEqual((lote.correctos, lote.errores, lote.progreso), (2, 1, 100))
         self.assertEqual(lote.incidencias[0]['referencia'], 'Ficha 2')
 
+    def test_sucursal_sin_correspondencia_no_se_copia_como_destino(self):
+        self.lector.leer_ejemplares_por_ficha.return_value = {
+            1: [{'Biblioteca': 165}],
+        }
+
+        lote = self.ejecutar()
+
+        self.assertEqual(lote.estado, 'con_incidencias')
+        self.assertTrue(any('No contemplado' in item['mensaje']
+                            for item in lote.incidencias))
+        llamada = self.escritor.insertar_ejemplar.call_args
+        self.assertIsNone(llamada.args[3])
+
     def test_fallo_de_conexion_conserva_pendientes_y_oculta_password(self):
         self.escritor.connect.side_effect = RuntimeError('Conexión fallida CLAVE_PRIVADA')
         lote = self.ejecutar()

@@ -1,0 +1,261 @@
+{
+  "version": "1.0",
+  "settings": {
+    "agencia_catalogo": "MX-Prometeo",
+    "idioma_default": "spa",
+    "item_type_bib": "LIBR0",
+    "item_type_item": "LIBR0",
+    "homebranch": "ITT",
+    "holdingbranch": "ITT"
+  },
+  "mappings": {
+    "status": {
+      "default": {
+        "0": "available",
+        "1": "available",
+        "2": "checkedout",
+        "3": "available"
+      },
+      "on_unmapped": "report_omit"
+    }
+  },
+  "record": {
+    "leader": "00000cam a2200000 a 4500",
+    "fields": [
+      {
+        "tag": "001",
+        "data": {
+          "source": "Ficha_No",
+          "transform": "text",
+          "on_missing": "report_omit"
+        }
+      },
+      {
+        "tag": "005",
+        "data": {
+          "sources": [
+            "FechaMod",
+            "Fecha"
+          ],
+          "transform": "date_or_now",
+          "on_missing": "report_now"
+        }
+      },
+      {
+        "tag": "008",
+        "data": {
+          "transform": "positions",
+          "length": 40,
+          "positions": [
+            {
+              "start": 0,
+              "literal": "000000"
+            },
+            {
+              "start": 6,
+              "literal": "s"
+            },
+            {
+              "start": 7,
+              "source": "Fecha",
+              "transform": "year",
+              "width": 4,
+              "on_missing": "literal",
+              "missing_value": "0000",
+              "report_missing": true,
+              "on_ambiguous": "report_blank"
+            },
+            {
+              "start": 18,
+              "literal": "mx"
+            },
+            {
+              "start": 21,
+              "literal": "spa"
+            },
+            {
+              "start": 29,
+              "literal": "b"
+            }
+          ]
+        }
+      },
+      {
+        "tag": "040",
+        "indicators": [
+          " ",
+          " "
+        ],
+        "subfields": [
+          {
+            "code": "a",
+            "setting": "agencia_catalogo",
+            "on_missing": "report_omit"
+          },
+          {
+            "code": "c",
+            "setting": "agencia_catalogo",
+            "on_missing": "report_omit"
+          }
+        ]
+      },
+      {
+        "tag": "020",
+        "indicators": [
+          " ",
+          " "
+        ],
+        "subfields": [
+          {
+            "code": "a",
+            "source": "ISBN",
+            "transform": "text",
+            "on_missing": "omit"
+          }
+        ]
+      },
+      {
+        "tag": "041",
+        "indicators": [
+          " ",
+          " "
+        ],
+        "subfields": [
+          {
+            "code": "a",
+            "setting": "idioma_default",
+            "on_missing": "report_omit"
+          }
+        ]
+      },
+      {
+        "tag": "082",
+        "indicators": [
+          " ",
+          " "
+        ],
+        "subfields": [
+          {
+            "code": "a",
+            "source": "Clasificacion",
+            "transform": "text",
+            "on_missing": "omit"
+          }
+        ]
+      },
+      {
+        "tag": "100",
+        "indicators": [
+          "1",
+          " "
+        ],
+        "subfields": [
+          {
+            "code": "a",
+            "source": "Autor",
+            "transform": "text",
+            "on_missing": "omit"
+          }
+        ]
+      },
+      {
+        "tag": "245",
+        "indicators": [
+          "1",
+          "0"
+        ],
+        "subfields": [
+          {
+            "code": "a",
+            "source": "Titulo",
+            "transform": "text",
+            "on_missing": "report_omit"
+          },
+          {
+            "code": "c",
+            "source": "Autor",
+            "transform": "text",
+            "on_missing": "omit"
+          }
+        ]
+      },
+      {
+        "tag": "942",
+        "indicators": [
+          " ",
+          " "
+        ],
+        "subfields": [
+          {
+            "code": "c",
+            "setting": "item_type_bib",
+            "on_missing": "report_omit"
+          }
+        ]
+      },
+      {
+        "tag": "952",
+        "repeat": "ejemplares",
+        "indicators": [
+          " ",
+          " "
+        ],
+        "subfields": [
+          {
+            "code": "a",
+            "setting": "homebranch",
+            "on_missing": "report_omit"
+          },
+          {
+            "code": "b",
+            "setting": "holdingbranch",
+            "on_missing": "report_omit"
+          },
+          {
+            "code": "y",
+            "setting": "item_type_item",
+            "on_missing": "report_omit"
+          },
+          {
+            "code": "p",
+            "source": "NumAdqui",
+            "transform": "text",
+            "on_missing": "report_omit"
+          },
+          {
+            "code": "o",
+            "source": "Clasificacion",
+            "transform": "text",
+            "on_missing": "omit"
+          },
+          {
+            "code": "z",
+            "source": "Accesible",
+            "transform": "mapped_text",
+            "mapping": "status",
+            "on_missing": "report_omit",
+            "on_unmapped": "report_omit"
+          },
+          {
+            "code": "c",
+            "transform": "volume_tomo",
+            "parts": [
+              {
+                "source": "Volumen",
+                "prefix": "V",
+                "include_zero": true
+              },
+              {
+                "source": "Tomo",
+                "prefix": "T",
+                "include_zero": false
+              }
+            ],
+            "on_missing": "omit",
+            "on_ambiguous": "report_omit"
+          }
+        ]
+      }
+    ]
+  }
+}

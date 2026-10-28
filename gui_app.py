@@ -41,11 +41,17 @@ class MigracionApp:
         self.access_reader: Optional[AccessReader] = None
         self.mysql_writer: Optional[MySQLWriter] = None
 
+        self.marc_converter = MarcConverter()
+
         # Valores por defecto para Koha (942 y 952)
-        self.var_item_type_bib = tk.StringVar(value=self.config.get('item_type_bib', 'LIBR0'))
-        self.var_item_type_item = tk.StringVar(value=self.config.get('item_type_item', 'LIBR0'))
-        self.var_homebranch = tk.StringVar(value=self.config.get('homebranch', 'ITT'))
-        self.var_holdingbranch = tk.StringVar(value=self.config.get('holdingbranch', 'ITT'))
+        self.var_item_type_bib = tk.StringVar(value=self.config.get(
+            'item_type_bib', self.marc_converter.item_type_bib))
+        self.var_item_type_item = tk.StringVar(value=self.config.get(
+            'item_type_item', self.marc_converter.item_type_item))
+        self.var_homebranch = tk.StringVar(value=self.config.get(
+            'homebranch', self.marc_converter.homebranch))
+        self.var_holdingbranch = tk.StringVar(value=self.config.get(
+            'holdingbranch', self.marc_converter.holdingbranch))
 
         self.marc_converter = MarcConverter(
             item_type_bib=self.var_item_type_bib.get(),
@@ -276,24 +282,23 @@ class MigracionApp:
         self.entry_pass.set(self.config.get('mysql', {}).get('password', ''))
         self.entry_db.set(self.config.get('mysql', {}).get('database', 'prometeo_marc'))
 
-        self.var_item_type_bib.set(self.config.get('item_type_bib', 'LIBR0'))
-        self.var_item_type_item.set(self.config.get('item_type_item', 'LIBR0'))
-        self.var_homebranch.set(self.config.get('homebranch', 'ITT'))
-        self.var_holdingbranch.set(self.config.get('holdingbranch', 'ITT'))
+        self.var_item_type_bib.set(self.config.get(
+            'item_type_bib', self.marc_converter.item_type_bib))
+        self.var_item_type_item.set(self.config.get(
+            'item_type_item', self.marc_converter.item_type_item))
+        self.var_homebranch.set(self.config.get(
+            'homebranch', self.marc_converter.homebranch))
+        self.var_holdingbranch.set(self.config.get(
+            'holdingbranch', self.marc_converter.holdingbranch))
 
         # Inicializar mapeos por defecto si no hay configuracion guardada
         branch_map = self.config.get('koha_branch_mapping', {})
-        status_map = self.config.get('item_status_mapping', {})
+        status_map = self.config.get('item_status_mapping')
 
         if not branch_map:
             branch_map = {}
-        if not status_map:
-            status_map = {
-                '0': 'available',
-                '1': 'available',
-                '2': 'checkedout',
-                '3': 'available',
-            }
+        if status_map is None:
+            status_map = self.marc_converter.mapping_defaults()
 
         self.txt_mapeo.delete('1.0', tk.END)
         self.txt_mapeo.insert('1.0', json.dumps(branch_map, indent=2, ensure_ascii=False))
@@ -303,6 +308,15 @@ class MigracionApp:
 
     def _guardar_config(self):
         if not self._sesion_valida():
+            return
+        try:
+            branch_mapping = self._parsear_json_texto(self.txt_mapeo.get('1.0', tk.END), {})
+            status_mapping = self._parsear_json_texto(
+                self.txt_status.get('1.0', tk.END), self.marc_converter.mapping_defaults())
+            self._validar_mapeo_runtime(branch_mapping, 'sucursales')
+            self._validar_mapeo_runtime(status_mapping, 'estados')
+        except ValueError as exc:
+            messagebox.showerror('Mapeo no válido', str(exc))
             return
         # Recopila los valores visibles y los persiste como JSON.
         config = {
@@ -318,8 +332,8 @@ class MigracionApp:
                 'database': self.entry_db.get(),
                 'charset': 'utf8mb4',
             },
-            'koha_branch_mapping': self._parsear_json_texto(self.txt_mapeo.get('1.0', tk.END), {}),
-            'item_status_mapping': self._parsear_json_texto(self.txt_status.get('1.0', tk.END), {}),
+            'koha_branch_mapping': branch_mapping,
+            'item_status_mapping': status_mapping,
             'item_type_bib': self.entry_item_type_bib.get(),
             'item_type_item': self.entry_item_type_item.get(),
             'homebranch': self.entry_homebranch.get(),
@@ -341,8 +355,18 @@ class MigracionApp:
             return default
         try:
             return json.loads(texto)
-        except Exception:
-            return default
+        except json.JSONDecodeError as exc:
+            raise ValueError(f'JSON no válido en el mapeo: {exc.msg} (línea {exc.lineno}).') from exc
+
+    @staticmethod
+    def _validar_mapeo_runtime(mapeo, nombre):
+        if (not isinstance(mapeo, dict)
+                or any(not isinstance(origen, str) or not origen.strip()
+                       or not isinstance(destino, str) or not destino.strip()
+                       for origen, destino in mapeo.items())):
+            raise ValueError(
+                f'El mapeo de {nombre} debe ser un objeto JSON con claves y valores de texto no vacíos.'
+            )
 
     def log(self, mensaje: str):
         # Anade un mensaje al final del registro visible y desplaza la vista.
@@ -664,37 +688,35 @@ class MigracionApp:
             return
         saltar = self.var_saltar_existentes.get()
 
-        branch_mapping = self._parsear_json_texto(self.txt_mapeo.get('1.0', tk.END), {})
-        status_mapping = self._parsear_json_texto(self.txt_status.get('1.0', tk.END), {})
-        # Mapeo automático por defecto si no hay configuración
-        if not status_mapping:
-            status_mapping = {
-                '0': 'available',
-                '1': 'available',
-                '2': 'checkedout',
-                '3': 'available',
-            }
-        if not branch_mapping:
-            # Se usa el código de Access directamente como código de sucursal en Koha
-            branch_mapping = {}
-
-        item_type_bib = self.entry_item_type_bib.get() or 'LIBR0'
-        item_type_item = self.entry_item_type_item.get() or 'LIBR0'
-        homebranch = self.entry_homebranch.get() or 'ITT'
-        holdingbranch = self.entry_holdingbranch.get() or 'ITT'
-
-        # Actualizar el conversor con los valores actuales
-        self.marc_converter = MarcConverter(
-            item_type_bib=item_type_bib,
-            item_type_item=item_type_item,
-            homebranch=homebranch,
-            holdingbranch=holdingbranch,
-        )
+        try:
+            branch_mapping = self._parsear_json_texto(
+                self.txt_mapeo.get('1.0', tk.END), {})
+            status_mapping = self._parsear_json_texto(
+                self.txt_status.get('1.0', tk.END),
+                MarcConverter.mapping_defaults(),
+            )
+            self._validar_mapeo_runtime(branch_mapping, 'sucursales')
+            self._validar_mapeo_runtime(status_mapping, 'estados')
+            conversor = MarcConverter(
+                item_type_bib=self.entry_item_type_bib.get(),
+                item_type_item=self.entry_item_type_item.get(),
+                homebranch=self.entry_homebranch.get(),
+                holdingbranch=self.entry_holdingbranch.get(),
+            )
+            huella_mapeo = conversor.mapping_fingerprint(branch_mapping, status_mapping)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror('Mapeo no válido', str(exc))
+            return
+        self.marc_converter = conversor
 
         try:
             self.historial_lotes.actualizar(lote.id, estado='en_proceso', etapa='conexion',
                 total_objetivo=min(total, limite) if limite else total, destino=self._destino_actual(),
-                evento='Migración iniciada. Conectando al destino MySQL.')
+                version_mapeo=self.marc_converter.mapping_version,
+                huella_mapeo=huella_mapeo,
+                evento=(f'Migración iniciada con mapeo MARC21 versión '
+                        f'{self.marc_converter.mapping_version} '
+                        f'(SHA-256 {huella_mapeo}). Conectando al destino MySQL.'))
         except (OSError, ValueError) as exc:
             messagebox.showerror('No se pudo registrar el lote', str(exc))
             return
@@ -780,15 +802,42 @@ class MigracionApp:
                         cont_omitidos += 1
                     else:
                         ejemplares = reader.leer_ejemplares_por_ficha([id_ficha]).get(id_ficha, [])
+                        incidencias_conversion = []
                         record = self.marc_converter.ficha_a_record(ficha, ejemplares,
-                            branch_mapping=branch_mapping, status_mapping=status_mapping)
+                            branch_mapping=branch_mapping, status_mapping=status_mapping,
+                            incidencias=incidencias_conversion)
+                        referencia = f'Ficha {id_ficha}'
+                        for incidencia in incidencias_conversion:
+                            incidencias.append({
+                                'referencia': referencia + ' · ' + incidencia['referencia'],
+                                'mensaje': incidencia['mensaje'],
+                            })
+                            self.log(
+                                f"[AVISO] Lote {lote_id}, {referencia}, "
+                                f"{incidencia['referencia']}: {incidencia['mensaje']}"
+                            )
                         marcxml = self.marc_converter.record_a_marcxml(record)
                         iso2709 = self.marc_converter.record_a_iso2709(record)
                         id_registro = writer.insertar_registro_marc(id_ficha, str(id_ficha), marcxml, iso2709)
                         for ej in ejemplares:
                             biblioteca = ej.get('Biblioteca')
-                            bc = str(biblioteca) if biblioteca is not None else ''
-                            branch_code = branch_mapping.get(bc, bc) if branch_mapping else bc
+                            bc = str(biblioteca).strip() if biblioteca is not None else ''
+                            branch_code = branch_mapping.get(bc) if bc else None
+                            if not bc:
+                                mensaje = 'Faltante: Biblioteca no tiene valor; no se asignó una sucursal Koha.'
+                            elif branch_code is None:
+                                mensaje = (
+                                    f'No contemplado: Biblioteca={bc!r} no tiene correspondencia '
+                                    'autorizada; no se asignó una sucursal Koha.'
+                                )
+                            else:
+                                mensaje = None
+                            if mensaje:
+                                incidencias.append({
+                                    'referencia': referencia + ' · Biblioteca',
+                                    'mensaje': mensaje,
+                                })
+                                self.log(f'[AVISO] Lote {lote_id}, {referencia}: {mensaje}')
                             writer.insertar_ejemplar(id_registro, id_ficha, ej, branch_code,
                                                     signatura=ficha.get('Clasificacion'))
                             cont_ejemplares += 1
@@ -806,14 +855,16 @@ class MigracionApp:
                 if idx % 25 == 0 or idx == total_fichas or monotonic() - ultimo_avance >= 0.5:
                     guardar_avance()
                     ultimo_avance = monotonic()
-            estado = 'con_incidencias' if cont_err else 'concluido'
-            guardar_avance(estado=estado, etapa='revision' if cont_err else 'finalizado',
+            tiene_incidencias = bool(cont_err or incidencias)
+            estado = 'con_incidencias' if tiene_incidencias else 'concluido'
+            guardar_avance(estado=estado, etapa='revision' if tiene_incidencias else 'finalizado',
                            evento=f'Ejecución terminada. Correctos: {cont_ok}; omitidos: {cont_omitidos}; errores: {cont_err}.')
             self.log(f'Lote {lote_id} finalizado. OK: {cont_ok}, omitidos: {cont_omitidos}, errores: {cont_err}.')
             self._publicar_ui(self._finalizar_migracion)
-            self._publicar_ui(messagebox.showwarning if cont_err else messagebox.showinfo,
-                'Lote con incidencias' if cont_err else 'Lote concluido',
-                f'Correctos: {cont_ok}\nOmitidos: {cont_omitidos}\nErrores: {cont_err}\nEjemplares: {cont_ejemplares}')
+            self._publicar_ui(messagebox.showwarning if tiene_incidencias else messagebox.showinfo,
+                'Lote con incidencias' if tiene_incidencias else 'Lote concluido',
+                f'Correctos: {cont_ok}\nOmitidos: {cont_omitidos}\nErrores: {cont_err}'
+                f'\nIncidencias: {len(incidencias)}\nEjemplares: {cont_ejemplares}')
         except _DetencionSolicitada:
             try:
                 lote = self.historial_lotes.obtener(lote_id)
@@ -856,7 +907,7 @@ class MigracionApp:
         if lote.estado == 'en_proceso' and self._detencion_solicitada.is_set():
             estado = 'Deteniendo al terminar la ficha u operación en curso…'
         self.lbl_estado.config(text=f'{lote.id}: {lote.procesados}/{lote.total_objetivo} · {estado}')
-        self.lbl_stats.config(text=f'Correctos: {lote.correctos} | Omitidos: {lote.omitidos} | Errores: {lote.errores} | Ejemplares: {lote.ejemplares}')
+        self.lbl_stats.config(text=f'Correctos: {lote.correctos} | Omitidos: {lote.omitidos} | Errores: {lote.errores} | Incidencias: {len(lote.incidencias)} | Ejemplares: {lote.ejemplares}')
         self._actualizar_panel()
 
     def _finalizar_migracion(self):

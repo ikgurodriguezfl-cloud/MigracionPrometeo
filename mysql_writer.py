@@ -131,7 +131,7 @@ class MySQLWriter:
             return cur.lastrowid
 
     def insertar_ejemplar(self, id_registro_marc: int, id_ficha: int,
-                          ejemplar: Dict, branch_koha: str,
+                          ejemplar: Dict, branch_koha: Optional[str],
                           signatura: Optional[str] = None):
         with self.conn.cursor() as cur:
             cur.execute(
