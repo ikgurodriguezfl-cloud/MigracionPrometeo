@@ -1,5 +1,4 @@
 """Pantalla de inicio de sesion."""
-import sqlite3
 import tkinter as tk
 from tkinter import ttk, messagebox
 from auth import AuthenticationService
@@ -23,12 +22,10 @@ class LoginScreen:
         self.on_login_success = on_login_success
 
         self.root.title('Prometeo Migrator - Inicio de sesion')
-        self.root.geometry('430x560')
-        self.root.minsize(430, 560)
+        self.root.geometry('480x520')
+        self.root.minsize(480, 520)
         self.root.resizable(False, False)
         self.root.configure(background=FONDO_PANEL)
-        self.modo = 'login'
-
         self._crear_interfaz()
 
     def _crear_interfaz(self):
@@ -38,16 +35,16 @@ class LoginScreen:
 
         # Caja blanca que encierra todo el formulario.
         self.tarjeta = tk.Frame(contenedor, bg=BLANCO)
-        self.tarjeta.pack(expand=True, fill='both', padx=70, pady=70)
+        self.tarjeta.pack(expand=True, fill='both', padx=46, pady=46)
 
         # Contenido centrado dentro de la caja blanca, con respiro respecto a los bordes.
         interior = tk.Frame(self.tarjeta, bg=BLANCO)
-        interior.pack(expand=True, fill='both', padx=30, pady=30)
+        interior.pack(expand=True, fill='both', padx=36, pady=34)
 
         self.lbl_titulo = tk.Label(
             interior,
             text='Prometeo Migrator',
-            font=('Segoe UI', 22, 'bold'),
+            font=('Segoe UI', 21, 'bold'),
             fg=TEXTO_TITULO,
             bg=BLANCO,
         )
@@ -63,15 +60,12 @@ class LoginScreen:
         self.lbl_sub.pack(pady=(0, 22))
 
         self.form_frame = tk.Frame(interior, bg=BLANCO)
-        self.form_frame.pack(fill='x', pady=22)
+        self.form_frame.pack(fill='x', pady=14)
 
         self.entry_usuario = None
         self.entry_contrasena = None
-        self.entry_confirmacion = None
-        self.btn_principal = None
-        self.btn_secundario = None
         self._mostrar_login()
-        self.root.bind('<Return>', lambda e: self._accion_enter())
+        self.root.bind('<Return>', lambda e: self._iniciar_sesion())
 
     def _crear_campo(self, texto, show=None):
         frame = tk.Frame(self.form_frame, bg=BLANCO)
@@ -105,12 +99,11 @@ class LoginScreen:
         for widget in self.form_frame.winfo_children():
             widget.destroy()
 
-    def _crear_botones(self, texto_principal, comando_principal,
-                       texto_secundario, comando_secundario):
-        self.btn_principal = tk.Button(
+    def _crear_boton_principal(self, texto, comando):
+        boton = tk.Button(
             self.form_frame,
-            text=texto_principal,
-            command=lambda: comando_principal(),
+            text=texto,
+            command=comando,
             bg=GUINDA,
             fg=BLANCO,
             activebackground=GUINDA_CLARO,
@@ -121,78 +114,15 @@ class LoginScreen:
             font=('Segoe UI', 10, 'bold'),
             cursor='hand2',
         )
-        self.btn_principal.pack(fill='x', pady=(16, 6))
-
-        self.btn_secundario = tk.Button(
-            self.form_frame,
-            text=texto_secundario,
-            command=lambda: comando_secundario(),
-            bg=BLANCO,
-            fg=GUINDA,
-            activebackground=FRIO,
-            activeforeground=GUINDA_CLARO,
-            relief='flat',
-            padx=24,
-            pady=6,
-            font=('Segoe UI', 10),
-            cursor='hand2',
-        )
-        self.btn_secundario.pack(fill='x', pady=(0, 4))
+        boton.pack(fill='x', pady=(16, 6))
 
     def _mostrar_login(self):
-        self.modo = 'login'
         self.lbl_titulo.config(text='Iniciar sesion')
         self._limpiar_formulario()
         self.entry_usuario = self._crear_campo('Usuario:')
         self.entry_contrasena = self._crear_campo('Contrasena:', show='*')
-        self._crear_botones(
-            'Iniciar sesion', self._iniciar_sesion,
-            'Crear cuenta', self._mostrar_registro,
-        )
+        self._crear_boton_principal('Iniciar sesion', self._iniciar_sesion)
         self.entry_usuario.focus()
-
-    def _mostrar_registro(self):
-        self.modo = 'registro'
-        self.lbl_titulo.config(text='Crear cuenta')
-        self._limpiar_formulario()
-        self.entry_usuario = self._crear_campo('Usuario:')
-        self.entry_contrasena = self._crear_campo('Contrasena:', show='*')
-        self.entry_confirmacion = self._crear_campo('Repetir contrasena:', show='*')
-        self._crear_botones(
-            'Registrar cuenta', self._registrar_cuenta,
-            'Volver a iniciar sesion', self._mostrar_login,
-        )
-        self.entry_usuario.focus()
-
-    def _registrar_cuenta(self):
-        usuario = self.entry_usuario.get().strip()
-        contrasena = self.entry_contrasena.get()
-        confirmacion = self.entry_confirmacion.get()
-
-        if not usuario or not contrasena or not confirmacion:
-            messagebox.showwarning('Atencion', 'Complete todos los campos.')
-            return
-        if contrasena != confirmacion:
-            messagebox.showerror('Registro rechazado', 'Las contrasenas no coinciden.')
-            return
-
-        try:
-            self.auth_service.create_user(usuario, contrasena)
-        except sqlite3.IntegrityError:
-            messagebox.showerror('Registro rechazado', 'Ese usuario ya existe.')
-            return
-        except ValueError as error:
-            messagebox.showerror('Registro rechazado', str(error))
-            return
-
-        messagebox.showinfo('Cuenta creada', 'La cuenta se creo correctamente.')
-        self._mostrar_login()
-
-    def _accion_enter(self):
-        if self.modo == 'registro':
-            self._registrar_cuenta()
-        else:
-            self._iniciar_sesion()
 
     def _iniciar_sesion(self):
         usuario = self.entry_usuario.get().strip()

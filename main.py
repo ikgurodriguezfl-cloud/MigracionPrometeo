@@ -14,6 +14,9 @@ def main():
     root = tk.Tk()
     auth_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'auth.db')
     auth_service = AuthenticationService(auth_path)
+    admin_password = os.environ.get('PROMETEO_ADMIN_PASSWORD')
+    if admin_password:
+        auth_service.ensure_admin(admin_password)
 
     def mostrar_login():
         # Limpiar todos los widgets de la ventana actual
@@ -21,9 +24,6 @@ def main():
             widget.destroy()
 
         root.title('Prometeo Migrator - Inicio de sesion')
-        root.geometry('430x560')
-        root.minsize(430, 560)
-        root.resizable(False, False)
         try:
             LoginScreen(root, auth_service=auth_service, on_login_success=ir_a_principal)
         except TypeError as error:

@@ -52,6 +52,16 @@ class AuthenticationTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.service.require_authenticated(token)
 
+    def test_solo_admin_puede_crear_usuarios(self):
+        self.service.ensure_admin('admin-compartido')
+        self.service.create_user('usuario', 'usuario-123')
+        admin_token = self.service.authenticate('admin', 'admin-compartido')
+        user_token = self.service.authenticate('usuario', 'usuario-123')
+
+        self.service.require_admin(admin_token)
+        with self.assertRaises(PermissionError):
+            self.service.require_admin(user_token)
+
 
 if __name__ == '__main__':
     unittest.main()
