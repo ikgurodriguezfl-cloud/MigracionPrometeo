@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import json
 import os
+import sqlite3
 import threading
 from queue import Empty, Queue
 from time import monotonic
@@ -73,6 +74,8 @@ class MigracionApp:
     def _crear_interfaz(self):
         toolbar = ttk.Frame(self.root)
         toolbar.pack(fill='x', padx=10, pady=(10, 0))
+        if self.auth_service is not None and self.auth_service.is_admin(self.session_token):
+            ttk.Button(toolbar, text='Crear usuario', command=self._abrir_registro_usuario).pack(side='left')
         ttk.Button(toolbar, text='Cerrar sesion', command=self._cerrar_sesion).pack(side='right')
 
         # El panel forma parte de la misma ventana y del mismo proceso.
@@ -452,6 +455,57 @@ class MigracionApp:
             self.on_logout()
         else:
             self.cerrar()
+
+    def _abrir_registro_usuario(self):
+        try:
+            self.auth_service.require_admin(self.session_token)
+        except PermissionError as error:
+            messagebox.showerror('Acceso denegado', str(error))
+            return
+
+        ventana = tk.Toplevel(self.root)
+        ventana.title('Crear usuario')
+        ventana.resizable(False, False)
+        ventana.transient(self.root)
+        ventana.grab_set()
+
+        formulario = ttk.Frame(ventana, padding=20)
+        formulario.pack(fill='both', expand=True)
+        ttk.Label(formulario, text='Nuevo usuario').grid(row=0, column=0, columnspan=2, pady=(0, 12))
+        ttk.Label(formulario, text='Usuario:').grid(row=1, column=0, sticky='e', padx=5, pady=5)
+        entrada_usuario = ttk.Entry(formulario, width=30)
+        entrada_usuario.grid(row=1, column=1, padx=5, pady=5)
+        ttk.Label(formulario, text='Contrasena:').grid(row=2, column=0, sticky='e', padx=5, pady=5)
+        entrada_contrasena = ttk.Entry(formulario, width=30, show='*')
+        entrada_contrasena.grid(row=2, column=1, padx=5, pady=5)
+        ttk.Label(formulario, text='Repetir contrasena:').grid(row=3, column=0, sticky='e', padx=5, pady=5)
+        entrada_confirmacion = ttk.Entry(formulario, width=30, show='*')
+        entrada_confirmacion.grid(row=3, column=1, padx=5, pady=5)
+
+        def registrar():
+            try:
+                self.auth_service.require_admin(self.session_token)
+                usuario = entrada_usuario.get().strip()
+                contrasena = entrada_contrasena.get()
+                confirmacion = entrada_confirmacion.get()
+                if not usuario or not contrasena or not confirmacion:
+                    raise ValueError('Complete todos los campos.')
+                if contrasena != confirmacion:
+                    raise ValueError('Las contrasenas no coinciden.')
+                self.auth_service.create_user(usuario, contrasena)
+            except sqlite3.IntegrityError:
+                messagebox.showerror('Registro rechazado', 'Ese usuario ya existe.', parent=ventana)
+                return
+            except (PermissionError, ValueError) as error:
+                messagebox.showerror('Registro rechazado', str(error), parent=ventana)
+                return
+            messagebox.showinfo('Cuenta creada', 'El usuario fue creado correctamente.', parent=ventana)
+            ventana.destroy()
+
+        ttk.Button(formulario, text='Crear usuario', command=registrar).grid(
+            row=4, column=0, columnspan=2, pady=(14, 0)
+        )
+        entrada_usuario.focus()
 
     def _seleccionar_access(self):
         # Abre el selector de archivos filtrado para copias Access.
