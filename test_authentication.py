@@ -14,7 +14,8 @@ class AuthenticationTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.database_path = Path(self.temp_dir.name) / 'auth.db'
         self.service = AuthenticationService(str(self.database_path))
-        self.service.create_user('admin', 'correcta-123')
+        # Se añade el rol de 'Administracion' al usuario por defecto
+        self.service.create_user('admin', 'correcta-123', 'Administracion')
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -54,13 +55,21 @@ class AuthenticationTests(unittest.TestCase):
 
     def test_solo_admin_puede_crear_usuarios(self):
         self.service.ensure_admin('admin-compartido')
-        self.service.create_user('usuario', 'usuario-123')
+        # Se especifica el rol al crear un usuario nuevo en la prueba
+        self.service.create_user('usuario', 'usuario-123', 'Ejecucion')
         admin_token = self.service.authenticate('admin', 'admin-compartido')
         user_token = self.service.authenticate('usuario', 'usuario-123')
 
         self.service.require_admin(admin_token)
         with self.assertRaises(PermissionError):
             self.service.require_admin(user_token)
+
+    def test_obtener_perfil_devuelve_rol_asignado(self):
+        # Nueva prueba para validar que el token recupera el rol exacto de la base de datos
+        self.service.create_user('revisor_test', 'clave-123', 'Revision')
+        token = self.service.authenticate('revisor_test', 'clave-123')
+        perfil = self.service.get_profile(token)
+        self.assertEqual(perfil, 'Revision')
 
 
 if __name__ == '__main__':

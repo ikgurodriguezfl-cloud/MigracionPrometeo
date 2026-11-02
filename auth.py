@@ -53,19 +53,29 @@ class AuthenticationService:
                     "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"
                 )
 
-    def create_user(self, username: str, password: str, role: str = 'user'):
+    def create_user(self, username: str, password: str, role: str = 'Ejecucion'):
         username = username.strip()
-        if not username or not password or role not in ('admin', 'user'):
-            raise ValueError('El usuario y la contrasena son obligatorios.')
+        # Se amplía la validación para aceptar los perfiles definidos en la matriz
+        if not username or not password or role not in ('Ejecucion', 'Revision', 'Aprobacion', 'Administracion', 'admin', 'user'):
+            raise ValueError('El usuario, la contrasena y un rol valido son obligatorios.')
+        
         password_hash = bcrypt.hashpw(
             password.encode('utf-8'),
             bcrypt.gensalt(rounds=self.BCRYPT_ROUNDS),
         ).decode('ascii')
+        
         with self._connect() as connection:
             connection.execute(
                 'INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)',
                 (username, password_hash, role),
             )
+
+    def get_profile(self, token: str) -> str:
+        """Devuelve el perfil asociado al token de sesión actual."""
+        self.require_authenticated(token)
+        rol_actual = self._active_sessions[token].get('role', 'Ejecucion')
+        # Homologa el rol por defecto del sistema con la matriz de permisos
+        return 'Administracion' if rol_actual == 'admin' else rol_actual
 
     def ensure_admin(self, password: str):
         """Crea o actualiza la cuenta admin compartida del entorno."""

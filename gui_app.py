@@ -15,6 +15,7 @@ from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
 from lotes import HistorialLotes, acciones_lote
 from panel_lotes import PanelLotes
+from permissions import requerir_permiso, AccesoDenegado
 
 
 class _DetencionSolicitada(Exception):
@@ -25,12 +26,15 @@ class MigracionApp:
     def __init__(self, root: tk.Tk, historial_lotes=None,
                  auth_service: Optional[AuthenticationService] = None,
                  session_token: Optional[str] = None, on_logout=None):
-        # Inicializa la ventana, carga la configuracion y prepara el conversor MARC.
         self.root = root
         self.auth_service = auth_service
         self.session_token = session_token
         self.on_logout = on_logout
-        self.root.title('Prometeo Migrator - Access a MARC21 (Koha)')
+        
+        # Obtención del perfil para la matriz de permisos
+        self.perfil_usuario = self.auth_service.get_profile(self.session_token) if self.auth_service else "Ejecucion"
+        
+        self.root.title(f'Prometeo Migrator - Access a MARC21 (Koha) | Perfil: {self.perfil_usuario}')
         ancho = min(1150, self.root.winfo_screenwidth() - 80)
         alto = min(700, self.root.winfo_screenheight() - 120)
         self.root.geometry(f'{ancho}x{alto}')
@@ -42,7 +46,6 @@ class MigracionApp:
         self.access_reader: Optional[AccessReader] = None
         self.mysql_writer: Optional[MySQLWriter] = None
 
-        # Valores por defecto para Koha (942 y 952)
         self.var_item_type_bib = tk.StringVar(value=self.config.get('item_type_bib', 'LIBR0'))
         self.var_item_type_item = tk.StringVar(value=self.config.get('item_type_item', 'LIBR0'))
         self.var_homebranch = tk.StringVar(value=self.config.get('homebranch', 'ITT'))
@@ -78,7 +81,6 @@ class MigracionApp:
             ttk.Button(toolbar, text='Crear usuario', command=self._abrir_registro_usuario).pack(side='left')
         ttk.Button(toolbar, text='Cerrar sesion', command=self._cerrar_sesion).pack(side='right')
 
-        # El panel forma parte de la misma ventana y del mismo proceso.
         notebook = ttk.Notebook(self.root)
         self.notebook = notebook
         notebook.pack(fill='both', expand=True, padx=10, pady=10)
@@ -109,7 +111,6 @@ class MigracionApp:
             variable.trace_add('write', lambda *_: self._actualizar_panel())
 
     def _campo(self, parent, fila, col, texto, valor, ancho=30, show=None):
-        # Crea una etiqueta y su campo de entrada para reutilizarlos en formularios.
         ttk.Label(parent, text=texto).grid(row=fila, column=col*2, sticky='e', padx=5, pady=2)
         var = tk.StringVar(value=valor)
         entry = ttk.Entry(parent, textvariable=var, width=ancho, show=show)
@@ -117,19 +118,16 @@ class MigracionApp:
         return var
 
     def _crear_pestana_conexion(self):
-        # Muestra el archivo Access de origen y los datos de conexion MySQL destino.
         f = self.frame_conexion
 
         lbl_access = ttk.LabelFrame(f, text='Base de datos Access (.mdb/.accdb)')
         lbl_access.pack(fill='x', padx=10, pady=5)
 
-        # Ruta editable; al cambiarla se actualizan nombre y tamano del archivo.
         self.var_access_path = tk.StringVar(value=self.config.get('access', {}).get('path', ''))
         self.var_access_path.trace_add('write', lambda *_: self._actualizar_info_access())
         fila_archivo = ttk.Frame(lbl_access)
         fila_archivo.pack(fill='x', padx=5, pady=(5, 0))
         fila_archivo.columnconfigure(0, weight=1)
-        # Permite seleccionar una copia Access o probar su conexion y estructura.
         ttk.Entry(fila_archivo, textvariable=self.var_access_path).grid(
             row=0, column=0, sticky='ew', padx=(0, 5)
         )
@@ -143,7 +141,6 @@ class MigracionApp:
         fila_info = ttk.Frame(lbl_access)
         fila_info.pack(fill='x', padx=5, pady=(3, 5))
         fila_info.columnconfigure(0, weight=1)
-        # Informa el nombre y peso del archivo, y el conteo tras probar Access.
         self.lbl_info_access = ttk.Label(
             fila_info, text='Archivo seleccionado: --', anchor='w'
         )
@@ -155,7 +152,6 @@ class MigracionApp:
         lbl_mysql = ttk.LabelFrame(f, text='Base de datos MySQL (destino MARC21)')
         lbl_mysql.pack(fill='x', padx=10, pady=5)
 
-        # Datos necesarios para conectar con el servidor y esquema destino.
         grid = ttk.Frame(lbl_mysql)
         grid.pack(fill='x', padx=5, pady=5)
 
@@ -165,32 +161,26 @@ class MigracionApp:
         self.entry_pass = self._campo(grid, 1, 2, 'Contrasena:', self.config.get('mysql', {}).get('password', ''), show='*')
         self.entry_db = self._campo(grid, 2, 0, 'Base de datos:', self.config.get('mysql', {}).get('database', 'prometeo_marc'))
 
-        # Verifica MySQL y crea las tablas si la conexion resulta valida.
         ttk.Button(lbl_mysql, text='Probar conexion MySQL', command=self._probar_mysql).pack(pady=5)
-        # Muestra el total de registros MARC ya almacenados en el destino.
         self.lbl_conteo_mysql = ttk.Label(lbl_mysql, text='Registros migrados: --')
         self.lbl_conteo_mysql.pack(pady=2)
 
     def _crear_pestana_migracion(self):
-        # Ofrece controles para iniciar la migracion y consultar su avance.
         f = self.frame_migracion
 
         lbl_opts = ttk.LabelFrame(f, text='Opciones de migracion')
         lbl_opts.pack(fill='x', padx=10, pady=5)
 
         self.var_limite = tk.StringVar(value='0')
-        # Limita la cantidad procesada; cero representa todas las fichas.
         ttk.Label(lbl_opts, text='Limite de registros (0 = todos):').pack(side='left', padx=5, pady=5)
         ttk.Entry(lbl_opts, textvariable=self.var_limite, width=10).pack(side='left', padx=5, pady=5)
 
         self.var_saltar_existentes = tk.BooleanVar(value=True)
-        # Evita insertar fichas cuyo identificador ya exista en MySQL.
         ttk.Checkbutton(lbl_opts, text='Saltar registros ya migrados',
                         variable=self.var_saltar_existentes).pack(side='left', padx=15, pady=5)
 
         btn_frame = ttk.Frame(f)
         btn_frame.pack(fill='x', padx=10, pady=10)
-        # Ejecuta la migracion validada o exporta los registros MARCXML guardados.
         self.btn_ejecutar = ttk.Button(btn_frame, text='Ejecutar migracion', command=self._iniciar_migracion)
         self.btn_ejecutar.pack(side='left', padx=5)
         self.btn_detener = ttk.Button(btn_frame, text='Detener migración', command=self._solicitar_detencion, state='disabled')
@@ -201,7 +191,6 @@ class MigracionApp:
         lbl_prog = ttk.LabelFrame(f, text='Progreso')
         lbl_prog.pack(fill='both', expand=True, padx=10, pady=5)
 
-        # Barra, estado y contadores de registros, ejemplares y errores.
         self.progress = ttk.Progressbar(lbl_prog, orient='horizontal', mode='determinate')
         self.progress.pack(fill='x', padx=10, pady=5)
 
@@ -212,7 +201,6 @@ class MigracionApp:
         self.lbl_stats.pack(pady=2)
 
     def _crear_pestana_config(self):
-        # Permite ajustar la equivalencia de codigos Access y valores Koha/MARC.
         f = self.frame_config
 
         lbl_map = ttk.LabelFrame(f, text='Mapeo de bibliotecas (Codigo Access -> Codigo sucursal Koha)')
@@ -231,7 +219,6 @@ class MigracionApp:
 
         lbl_status = ttk.LabelFrame(f, text='Mapeo de estado de ejemplar (Accesible -> Estado Koha)')
         lbl_status.pack(fill='x', padx=10, pady=5)
-        # JSON que traduce el valor Accesible al estado deseado en Koha.
         self.txt_status = tk.Text(lbl_status, width=60, height=6)
         self.txt_status.pack(fill='x', padx=5, pady=5)
         ejemplo_status = json.dumps(self.config.get('item_status_mapping', {}), indent=2, ensure_ascii=False)
@@ -240,7 +227,6 @@ class MigracionApp:
         lbl_tipos = ttk.LabelFrame(f, text='Valores por defecto para Koha (942 y 952)')
         lbl_tipos.pack(fill='x', padx=10, pady=5)
 
-        # Valores por defecto del tipo de item y de las sucursales en MARC.
         grid_tipos = ttk.Frame(lbl_tipos)
         grid_tipos.pack(fill='x', padx=5, pady=5)
 
@@ -249,19 +235,15 @@ class MigracionApp:
         self.entry_homebranch = self._campo(grid_tipos, 1, 0, '952$a - Homebranch:', self.var_homebranch.get(), ancho=12)
         self.entry_holdingbranch = self._campo(grid_tipos, 1, 2, '952$b - Holdingbranch:', self.var_holdingbranch.get(), ancho=12)
 
-        # Guarda en config.json las conexiones y los mapeos configurados.
         ttk.Button(f, text='Guardar configuracion', command=self._guardar_config).pack(pady=10)
 
     def _crear_pestana_log(self):
-        # Presenta mensajes de conexion, validacion y resultado de la migracion.
         f = self.frame_log
         self.txt_log = tk.Text(f, wrap='word', width=100, height=25)
         self.txt_log.pack(fill='both', expand=True, padx=10, pady=5)
-        # Borra solo el texto visible del log; no modifica los datos migrados.
         ttk.Button(f, text='Limpiar log', command=lambda: self.txt_log.delete('1.0', tk.END)).pack(pady=5)
 
     def cargar_config(self) -> Dict:
-        # Lee la configuracion guardada; si no existe, la interfaz usa valores por defecto.
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
@@ -271,7 +253,6 @@ class MigracionApp:
         return {}
 
     def _cargar_config_en_ui(self):
-        # Copia conexiones y mapeos guardados a los controles de la interfaz.
         self.var_access_path.set(self.config.get('access', {}).get('path', ''))
         self.entry_host.set(self.config.get('mysql', {}).get('host', 'localhost'))
         self.entry_port.set(str(self.config.get('mysql', {}).get('port', 3306)))
@@ -284,7 +265,6 @@ class MigracionApp:
         self.var_homebranch.set(self.config.get('homebranch', 'ITT'))
         self.var_holdingbranch.set(self.config.get('holdingbranch', 'ITT'))
 
-        # Inicializar mapeos por defecto si no hay configuracion guardada
         branch_map = self.config.get('koha_branch_mapping', {})
         status_map = self.config.get('item_status_mapping', {})
 
@@ -307,7 +287,6 @@ class MigracionApp:
     def _guardar_config(self):
         if not self._sesion_valida():
             return
-        # Recopila los valores visibles y los persiste como JSON.
         config = {
             'access': {
                 'path': self.var_access_path.get(),
@@ -338,7 +317,6 @@ class MigracionApp:
             messagebox.showerror('Error', 'No se pudo guardar la configuracion:\n' + str(e))
 
     def _parsear_json_texto(self, texto: str, default: Any) -> Any:
-        # Interpreta los mapeos escritos en las cajas de texto como JSON.
         texto = texto.strip()
         if not texto:
             return default
@@ -348,7 +326,6 @@ class MigracionApp:
             return default
 
     def log(self, mensaje: str):
-        # Anade un mensaje al final del registro visible y desplaza la vista.
         if threading.current_thread() is not threading.main_thread():
             self._eventos_ui.put((self.log, (mensaje,)))
             return
@@ -472,15 +449,23 @@ class MigracionApp:
         formulario = ttk.Frame(ventana, padding=20)
         formulario.pack(fill='both', expand=True)
         ttk.Label(formulario, text='Nuevo usuario').grid(row=0, column=0, columnspan=2, pady=(0, 12))
+        
         ttk.Label(formulario, text='Usuario:').grid(row=1, column=0, sticky='e', padx=5, pady=5)
         entrada_usuario = ttk.Entry(formulario, width=30)
         entrada_usuario.grid(row=1, column=1, padx=5, pady=5)
+        
         ttk.Label(formulario, text='Contrasena:').grid(row=2, column=0, sticky='e', padx=5, pady=5)
         entrada_contrasena = ttk.Entry(formulario, width=30, show='*')
         entrada_contrasena.grid(row=2, column=1, padx=5, pady=5)
+        
         ttk.Label(formulario, text='Repetir contrasena:').grid(row=3, column=0, sticky='e', padx=5, pady=5)
         entrada_confirmacion = ttk.Entry(formulario, width=30, show='*')
         entrada_confirmacion.grid(row=3, column=1, padx=5, pady=5)
+
+        ttk.Label(formulario, text='Perfil/Rol:').grid(row=4, column=0, sticky='e', padx=5, pady=5)
+        combo_perfil = ttk.Combobox(formulario, values=["Ejecucion", "Revision", "Aprobacion", "Administracion"], state='readonly', width=27)
+        combo_perfil.current(0)
+        combo_perfil.grid(row=4, column=1, padx=5, pady=5)
 
         def registrar():
             try:
@@ -488,27 +473,27 @@ class MigracionApp:
                 usuario = entrada_usuario.get().strip()
                 contrasena = entrada_contrasena.get()
                 confirmacion = entrada_confirmacion.get()
+                perfil = combo_perfil.get()
                 if not usuario or not contrasena or not confirmacion:
                     raise ValueError('Complete todos los campos.')
                 if contrasena != confirmacion:
                     raise ValueError('Las contrasenas no coinciden.')
-                self.auth_service.create_user(usuario, contrasena)
+                self.auth_service.create_user(usuario, contrasena, perfil)
             except sqlite3.IntegrityError:
                 messagebox.showerror('Registro rechazado', 'Ese usuario ya existe.', parent=ventana)
                 return
             except (PermissionError, ValueError) as error:
                 messagebox.showerror('Registro rechazado', str(error), parent=ventana)
                 return
-            messagebox.showinfo('Cuenta creada', 'El usuario fue creado correctamente.', parent=ventana)
+            messagebox.showinfo('Cuenta creada', f'El usuario fue creado con perfil {perfil}.', parent=ventana)
             ventana.destroy()
 
         ttk.Button(formulario, text='Crear usuario', command=registrar).grid(
-            row=4, column=0, columnspan=2, pady=(14, 0)
+            row=5, column=0, columnspan=2, pady=(14, 0)
         )
         entrada_usuario.focus()
 
     def _seleccionar_access(self):
-        # Abre el selector de archivos filtrado para copias Access.
         path = filedialog.askopenfilename(
             title='Seleccionar base de datos Access aprobada',
             filetypes=[('Bases de datos Access', '*.mdb *.accdb'), ('Todos los archivos', '*.*')],
@@ -517,7 +502,6 @@ class MigracionApp:
             self.var_access_path.set(path)
 
     def _actualizar_info_access(self):
-        # Actualiza la etiqueta con el nombre y tamano actual de la ruta elegida.
         path = self.var_access_path.get().strip()
         self._validacion_access = None
         self._actualizar_panel()
@@ -548,7 +532,6 @@ class MigracionApp:
         )
 
     def _validar_archivo_access(self, path: str) -> List[str]:
-        # Abre Access solo para validar; cierra la conexion incluso ante errores.
         reader = AccessReader(path)
         try:
             return reader.validar_archivo()
@@ -558,7 +541,14 @@ class MigracionApp:
     def _probar_access(self):
         if not self._sesion_valida():
             return
-        # Comprueba la copia y muestra el total de fichas si la prueba pasa.
+            
+        try:
+            requerir_permiso(self.perfil_usuario, "validar_access")
+        except AccesoDenegado as e:
+            messagebox.showerror('Acceso Restringido', str(e))
+            self.log(f'[BLOQUEO SEGURIDAD] {e}')
+            return
+            
         path = self.var_access_path.get().strip()
         if self.migracion_en_curso:
             messagebox.showwarning('Migración en curso', 'Espera a que termine el lote activo.')
@@ -592,7 +582,6 @@ class MigracionApp:
     def _probar_mysql(self):
         if not self._sesion_valida():
             return
-        # Comprueba los datos visibles de conexion y verifica las tablas destino.
         config = {
             'host': self.entry_host.get(),
             'port': int(self.entry_port.get() or 3306),
@@ -605,7 +594,7 @@ class MigracionApp:
             writer = MySQLWriter(config)
             if writer.test_connection():
                 writer.crear_tablas()
-                self.mysql_writer = writer  # mantener conexión abierta para exportar
+                self.mysql_writer = writer
                 stats = self._obtener_stats_mysql(config)
                 self.lbl_conteo_mysql.config(text='Registros migrados: ' + str(stats['total_registros']))
                 self.log('[OK] Conexion MySQL exitosa. Tablas verificadas.')
@@ -625,7 +614,7 @@ class MigracionApp:
                         writer = MySQLWriter(config)
                         writer.ensure_database()
                         writer.crear_tablas()
-                        self.mysql_writer = writer  # mantener conexión abierta
+                        self.mysql_writer = writer
                         stats = self._obtener_stats_mysql(config)
                         self.lbl_conteo_mysql.config(text='Registros migrados: ' + str(stats['total_registros']))
                         self.log('[OK] Base de datos creada y tablas verificadas.')
@@ -640,7 +629,6 @@ class MigracionApp:
                 messagebox.showerror('Error', 'No se pudo conectar a MySQL:\n' + msg)
 
     def _obtener_stats_mysql(self, config: Dict) -> Dict:
-        # Consulta estadisticas del destino para mostrar el total migrado.
         try:
             writer = MySQLWriter(config)
             stats = writer.obtener_estadisticas()
@@ -652,7 +640,14 @@ class MigracionApp:
     def _iniciar_migracion(self):
         if not self._sesion_valida():
             return
-        # Valida el archivo y la configuracion antes de permitir el procesamiento.
+            
+        try:
+            requerir_permiso(self.perfil_usuario, "iniciar_conversion")
+        except AccesoDenegado as e:
+            messagebox.showerror('Acceso Restringido', str(e))
+            self.log(f'[BLOQUEO SEGURIDAD] {e}')
+            return
+            
         if self.migracion_en_curso:
             messagebox.showwarning('Atencion', 'Ya hay una migracion en curso.')
             return
@@ -670,7 +665,6 @@ class MigracionApp:
         except Exception as e:
             errores_validacion = [f'No se pudo validar el archivo Access: {e}']
         if errores_validacion:
-            # Un error de formato o estructura detiene el flujo antes de crear el hilo.
             mensaje = '\n'.join(errores_validacion)
             self.log('[ERROR] Validacion Access: ' + mensaje.replace('\n', ' | '))
             messagebox.showerror(
@@ -720,7 +714,6 @@ class MigracionApp:
 
         branch_mapping = self._parsear_json_texto(self.txt_mapeo.get('1.0', tk.END), {})
         status_mapping = self._parsear_json_texto(self.txt_status.get('1.0', tk.END), {})
-        # Mapeo automático por defecto si no hay configuración
         if not status_mapping:
             status_mapping = {
                 '0': 'available',
@@ -729,7 +722,6 @@ class MigracionApp:
                 '3': 'available',
             }
         if not branch_mapping:
-            # Se usa el código de Access directamente como código de sucursal en Koha
             branch_mapping = {}
 
         item_type_bib = self.entry_item_type_bib.get() or 'LIBR0'
@@ -737,7 +729,6 @@ class MigracionApp:
         homebranch = self.entry_homebranch.get() or 'ITT'
         holdingbranch = self.entry_holdingbranch.get() or 'ITT'
 
-        # Actualizar el conversor con los valores actuales
         self.marc_converter = MarcConverter(
             item_type_bib=item_type_bib,
             item_type_item=item_type_item,
@@ -754,7 +745,6 @@ class MigracionApp:
             return
         self.migracion_en_curso = True
         self._detencion_solicitada.clear()
-        # Deshabilita el boton durante el trabajo y deja el progreso listo.
         self.btn_ejecutar.config(state='disabled')
         self.progress['value'] = 0
         self.lbl_estado.config(text='Iniciando...')
@@ -780,7 +770,6 @@ class MigracionApp:
 
     def _ejecutar_migracion(self, path_access, config_mysql, limite, saltar,
                             branch_mapping, status_mapping, lote_id):
-        # El trabajo real informa al historial; Tkinter se actualiza desde su hilo.
         reader = writer = None
         cont_ok = cont_err = cont_omitidos = cont_ejemplares = 0
         fichas_correctas = []
@@ -805,7 +794,6 @@ class MigracionApp:
         try:
             comprobar_detencion()
             reader = AccessReader(path_access)
-            # Una conexión propia evita compartir el destino entre el hilo y la UI.
             writer = MySQLWriter(config_mysql)
             comprobar_detencion()
             writer.connect()
@@ -914,7 +902,6 @@ class MigracionApp:
         self._actualizar_panel()
 
     def _finalizar_migracion(self):
-        # Restablece el estado de la interfaz al terminar o fallar el proceso.
         self.migracion_en_curso = False
         for frame in (self.frame_conexion, self.frame_config):
             self.notebook.tab(frame, state='normal')
@@ -923,7 +910,14 @@ class MigracionApp:
     def _exportar_marcxml(self, lote_id=None):
         if not self._sesion_valida():
             return
-        # Reutiliza la exportación existente, acotada a las fichas del lote.
+            
+        try:
+            requerir_permiso(self.perfil_usuario, "aprobar_exportacion")
+        except AccesoDenegado as e:
+            messagebox.showerror('Acceso Restringido', str(e))
+            self.log(f'[BLOQUEO SEGURIDAD] {e}')
+            return
+            
         lote = self.historial_lotes.obtener(lote_id or self._lote_actual_id)
         if not self._politica_lote(lote)['exportar']:
             messagebox.showwarning('Exportación no disponible',
@@ -946,7 +940,6 @@ class MigracionApp:
             writer = MySQLWriter(config)
             writer.connect()
             filas = []
-            # Parámetros SQL, nunca interpolar los identificadores de las fichas.
             for inicio in range(0, len(lote.fichas_correctas), 500):
                 fichas = lote.fichas_correctas[inicio:inicio + 500]
                 parametros = ','.join(['%s'] * len(fichas))
