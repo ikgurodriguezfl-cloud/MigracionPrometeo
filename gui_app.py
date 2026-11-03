@@ -15,7 +15,9 @@ from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
 from lotes import HistorialLotes, acciones_lote
 from panel_lotes import PanelLotes
-from permissions import requerir_permiso, AccesoDenegado
+from permissions import MATRIZ_PERMISOS, requerir_permiso, AccesoDenegado
+from identidad import aplicar_estilo, centrar, logo
+from exportacion_marc import exportar_lote
 
 
 class _DetencionSolicitada(Exception):
@@ -35,16 +37,11 @@ class MigracionApp:
         self.perfil_usuario = self.auth_service.get_profile(self.session_token) if self.auth_service else "Ejecucion"
         
         self.root.title(f'Prometeo Migrator - Access a MARC21 (Koha) | Perfil: {self.perfil_usuario}')
-        ancho = min(1150, self.root.winfo_screenwidth() - 80)
-        alto = min(700, self.root.winfo_screenheight() - 120)
-        self.root.geometry(f'{ancho}x{alto}')
-        self.root.minsize(min(1000, ancho), min(700, alto))
+        aplicar_estilo(root)
+        centrar(root)
 
         self.config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
         self.config = self.cargar_config()
-
-        self.access_reader: Optional[AccessReader] = None
-        self.mysql_writer: Optional[MySQLWriter] = None
 
         self.marc_converter = MarcConverter()
 
@@ -82,40 +79,61 @@ class MigracionApp:
                             self.historial_lotes.error_carga + '\nSe conservó el archivo anterior. No se iniciarán nuevas migraciones hasta resolverlo.')
 
     def _crear_interfaz(self):
-        toolbar = ttk.Frame(self.root)
-        toolbar.pack(fill='x', padx=10, pady=(10, 0))
-        if self.auth_service is not None and self.auth_service.is_admin(self.session_token):
-            ttk.Button(toolbar, text='Crear usuario', command=self._abrir_registro_usuario).pack(side='left')
-        ttk.Button(toolbar, text='Cerrar sesion', command=self._cerrar_sesion).pack(side='right')
+        barra = ttk.Frame(self.root, style='Marca.TFrame', padding=(8, 3))
+        barra.pack(fill='x')
+        logo(barra, 'nayarit-cecan.png').pack(side='left')
+        cuenta = ttk.Menubutton(barra, text='Cuenta')
+        menu = tk.Menu(cuenta, tearoff=False)
+        if self.perfil_usuario == 'Administracion':
+            menu.add_command(label='Crear usuario', command=self._abrir_registro_usuario)
+        menu.add_command(label='Cerrar sesión', command=self._cerrar_sesion)
+        cuenta.configure(menu=menu)
+        cuenta.pack(side='right')
+        self.estado_mysql = tk.StringVar(value='MySQL · sin probar')
+        self.abrir_ajustes = ttk.Button(barra, text='Ajustes', command=lambda: self.notebook.select(self.ajustes))
+        self.abrir_ajustes.pack(side='right', padx=3)
+        ttk.Label(self.root, textvariable=self.estado_mysql, anchor='e').pack(fill='x', padx=10)
 
-        notebook = ttk.Notebook(self.root)
-        self.notebook = notebook
-        notebook.pack(fill='both', expand=True, padx=10, pady=10)
+        ttk.Style(self.root).layout('Espacio.TNotebook.Tab', [])
+        self.notebook = ttk.Notebook(self.root, style='Espacio.TNotebook')
+        self.notebook.pack(fill='both', expand=True)
+        self.frame_conexion = ttk.Frame(self.notebook, padding=10)
+        self.ajustes = ttk.Frame(self.notebook, padding=8)
+        self.panel_lotes = PanelLotes(self.notebook, self.historial_lotes.listar, self._politica_lote,
+                                      self._iniciar_desde_panel, self._exportar_marcxml,
+                                      self._nuevo_lote, self._solicitar_detencion)
+        for marco, nombre in ((self.panel_lotes,'Lotes'),(self.frame_conexion,'Preparar'),(self.ajustes,'Ajustes')):
+            self.notebook.add(marco, text=nombre)
+        for marco, titulo in ((self.frame_conexion,'Preparar un lote'), (self.ajustes,'Ajustes')):
+            cabecera = ttk.Frame(marco)
+            cabecera.pack(fill='x', pady=(0,6))
+            ttk.Label(cabecera, text=titulo, style='Titulo.TLabel').pack(side='left')
+            ttk.Button(cabecera, text='Volver a lotes', command=lambda: self.notebook.select(self.panel_lotes)).pack(side='right')
 
-        self.frame_conexion = ttk.Frame(notebook)
-        self.frame_migracion = ttk.Frame(notebook)
-        self.frame_config = ttk.Frame(notebook)
-        self.frame_log = ttk.Frame(notebook)
-
-        self.panel_lotes = PanelLotes(
-            notebook, listar=self.historial_lotes.listar, politica=self._politica_lote,
-            iniciar=self._iniciar_desde_panel, exportar=self._exportar_marcxml,
-            conexiones=lambda: notebook.select(self.frame_conexion),
-            detener=self._solicitar_detencion,
-        )
-        notebook.add(self.panel_lotes, text='Inicio · Lotes')
-
-        notebook.add(self.frame_conexion, text='1. Conexiones')
-        notebook.add(self.frame_migracion, text='2. Migracion')
-        notebook.add(self.frame_config, text='3. Configuracion')
-        notebook.add(self.frame_log, text='4. Log')
-
-        self._crear_pestana_conexion()
-        self._crear_pestana_migracion()
+        ajustes = ttk.Notebook(self.ajustes)
+        ajustes.pack(fill='both', expand=True)
+        destino = ttk.Frame(ajustes)
+        self.frame_config = ttk.Frame(ajustes)
+        self.frame_log = ttk.Frame(ajustes)
+        if self.perfil_usuario == 'Administracion':
+            ajustes.add(destino, text='Destino MySQL')
+            ajustes.add(self.frame_config, text='Mapeo MARC21')
+        ajustes.add(self.frame_log, text='Bitácora')
+        self._crear_preparacion()
+        self._crear_destino(destino)
         self._crear_pestana_config()
         self._crear_pestana_log()
-        for variable in (self.entry_host, self.entry_port, self.entry_db):
-            variable.trace_add('write', lambda *_: self._actualizar_panel())
+        for var in (self.entry_host, self.entry_port, self.entry_db, self.entry_user, self.entry_pass):
+            var.trace_add('write', self._cambio_destino)
+
+    def _cambio_destino(self, *_):
+        self.estado_mysql.set('MySQL · sin probar')
+        self._actualizar_panel()
+
+    def _nuevo_lote(self):
+        if (self._sesion_valida() and not self.migracion_en_curso
+                and self.perfil_usuario in MATRIZ_PERMISOS['validar_access']):
+            self.notebook.select(self.frame_conexion)
 
     def _campo(self, parent, fila, col, texto, valor, ancho=30, show=None):
         ttk.Label(parent, text=texto).grid(row=fila, column=col*2, sticky='e', padx=5, pady=2)
@@ -124,7 +142,7 @@ class MigracionApp:
         entry.grid(row=fila, column=col*2+1, sticky='w', padx=5, pady=2)
         return var
 
-    def _crear_pestana_conexion(self):
+    def _crear_preparacion(self):
         f = self.frame_conexion
 
         lbl_access = ttk.LabelFrame(f, text='Base de datos Access (.mdb/.accdb)')
@@ -141,9 +159,7 @@ class MigracionApp:
         ttk.Button(fila_archivo, text='Examinar...', command=self._seleccionar_access).grid(
             row=0, column=1, padx=5
         )
-        ttk.Button(fila_archivo, text='Probar conexion', command=self._probar_access).grid(
-            row=0, column=2, padx=(5, 0)
-        )
+
 
         fila_info = ttk.Frame(lbl_access)
         fila_info.pack(fill='x', padx=5, pady=(3, 5))
@@ -156,6 +172,17 @@ class MigracionApp:
         self.lbl_conteo_access.grid(row=0, column=1, sticky='e')
         self._actualizar_info_access()
 
+        opciones = ttk.LabelFrame(f, text='Alcance de esta ejecución', padding=8)
+        opciones.pack(fill='x', padx=10, pady=5)
+        self.var_limite = tk.StringVar(value='0')
+        ttk.Label(opciones, text='Máximo de fichas (0 = todas)').pack(anchor='w')
+        ttk.Entry(opciones, width=10, textvariable=self.var_limite).pack(anchor='w')
+        self.var_saltar_existentes = tk.BooleanVar(value=True)
+        ttk.Checkbutton(opciones, text='Omitir fichas ya migradas', variable=self.var_saltar_existentes).pack(anchor='w')
+        ttk.Button(f, text='Validar y preparar lote', style='Principal.TButton',
+                   command=self._probar_access).pack(anchor='e', padx=10, pady=8)
+
+    def _crear_destino(self, f):
         lbl_mysql = ttk.LabelFrame(f, text='Base de datos MySQL (destino MARC21)')
         lbl_mysql.pack(fill='x', padx=10, pady=5)
 
@@ -163,59 +190,26 @@ class MigracionApp:
         grid.pack(fill='x', padx=5, pady=5)
 
         self.entry_host = self._campo(grid, 0, 0, 'Host:', self.config.get('mysql', {}).get('host', 'localhost'))
-        self.entry_port = self._campo(grid, 0, 2, 'Puerto:', str(self.config.get('mysql', {}).get('port', 3306)), ancho=8)
+        self.entry_port = self._campo(grid, 3, 0, 'Puerto:', str(self.config.get('mysql', {}).get('port', 3306)), ancho=8)
         self.entry_user = self._campo(grid, 1, 0, 'Usuario:', self.config.get('mysql', {}).get('user', 'root'))
-        self.entry_pass = self._campo(grid, 1, 2, 'Contrasena:', self.config.get('mysql', {}).get('password', ''), show='*')
+        self.entry_pass = self._campo(grid, 4, 0, 'Contrasena:', self.config.get('mysql', {}).get('password', ''), show='*')
         self.entry_db = self._campo(grid, 2, 0, 'Base de datos:', self.config.get('mysql', {}).get('database', 'prometeo_marc'))
 
         ttk.Button(lbl_mysql, text='Probar conexion MySQL', command=self._probar_mysql).pack(pady=5)
+        ttk.Button(lbl_mysql, text='Guardar ajustes', command=self._guardar_config).pack(pady=3)
         self.lbl_conteo_mysql = ttk.Label(lbl_mysql, text='Registros migrados: --')
         self.lbl_conteo_mysql.pack(pady=2)
 
-    def _crear_pestana_migracion(self):
-        f = self.frame_migracion
-
-        lbl_opts = ttk.LabelFrame(f, text='Opciones de migracion')
-        lbl_opts.pack(fill='x', padx=10, pady=5)
-
-        self.var_limite = tk.StringVar(value='0')
-        ttk.Label(lbl_opts, text='Limite de registros (0 = todos):').pack(side='left', padx=5, pady=5)
-        ttk.Entry(lbl_opts, textvariable=self.var_limite, width=10).pack(side='left', padx=5, pady=5)
-
-        self.var_saltar_existentes = tk.BooleanVar(value=True)
-        ttk.Checkbutton(lbl_opts, text='Saltar registros ya migrados',
-                        variable=self.var_saltar_existentes).pack(side='left', padx=15, pady=5)
-
-        btn_frame = ttk.Frame(f)
-        btn_frame.pack(fill='x', padx=10, pady=10)
-        self.btn_ejecutar = ttk.Button(btn_frame, text='Ejecutar migracion', command=self._iniciar_migracion)
-        self.btn_ejecutar.pack(side='left', padx=5)
-        self.btn_detener = ttk.Button(btn_frame, text='Detener migración', command=self._solicitar_detencion, state='disabled')
-        self.btn_detener.pack(side='left', padx=5)
-        self.btn_exportar = ttk.Button(btn_frame, text='Exportar MARCXML del lote', command=self._exportar_marcxml)
-        self.btn_exportar.pack(side='left', padx=5)
-
-        lbl_prog = ttk.LabelFrame(f, text='Progreso')
-        lbl_prog.pack(fill='both', expand=True, padx=10, pady=5)
-
-        self.progress = ttk.Progressbar(lbl_prog, orient='horizontal', mode='determinate')
-        self.progress.pack(fill='x', padx=10, pady=5)
-
-        self.lbl_estado = ttk.Label(lbl_prog, text='Listo.')
-        self.lbl_estado.pack(pady=2)
-
-        self.lbl_stats = ttk.Label(lbl_prog, text='Registros: 0 | Ejemplares: 0 | Errores: 0')
-        self.lbl_stats.pack(pady=2)
-
     def _crear_pestana_config(self):
         f = self.frame_config
+        ttk.Button(f, text='Guardar ajustes', command=self._guardar_config).pack(side='bottom', pady=4)
 
         lbl_map = ttk.LabelFrame(f, text='Mapeo de bibliotecas (Codigo Access -> Codigo sucursal Koha)')
         lbl_map.pack(fill='both', expand=True, padx=10, pady=5)
 
         txt_frame = ttk.Frame(lbl_map)
         txt_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        self.txt_mapeo = tk.Text(txt_frame, width=60, height=12)
+        self.txt_mapeo = tk.Text(txt_frame, width=25, height=3)
         self.txt_mapeo.pack(side='left', fill='both', expand=True)
         scroll = ttk.Scrollbar(txt_frame, command=self.txt_mapeo.yview)
         scroll.pack(side='right', fill='y')
@@ -226,7 +220,7 @@ class MigracionApp:
 
         lbl_status = ttk.LabelFrame(f, text='Mapeo de estado de ejemplar (Accesible -> Estado Koha)')
         lbl_status.pack(fill='x', padx=10, pady=5)
-        self.txt_status = tk.Text(lbl_status, width=60, height=6)
+        self.txt_status = tk.Text(lbl_status, width=25, height=3)
         self.txt_status.pack(fill='x', padx=5, pady=5)
         ejemplo_status = json.dumps(self.config.get('item_status_mapping', {}), indent=2, ensure_ascii=False)
         self.txt_status.insert('1.0', ejemplo_status)
@@ -238,11 +232,11 @@ class MigracionApp:
         grid_tipos.pack(fill='x', padx=5, pady=5)
 
         self.entry_item_type_bib = self._campo(grid_tipos, 0, 0, '942$c - Tipo ítem bibliográfico:', self.var_item_type_bib.get(), ancho=12)
-        self.entry_item_type_item = self._campo(grid_tipos, 0, 2, '952$y - Tipo ítem ejemplar:', self.var_item_type_item.get(), ancho=12)
+        self.entry_item_type_item = self._campo(grid_tipos, 2, 0, '952$y - Tipo ítem ejemplar:', self.var_item_type_item.get(), ancho=12)
         self.entry_homebranch = self._campo(grid_tipos, 1, 0, '952$a - Homebranch:', self.var_homebranch.get(), ancho=12)
-        self.entry_holdingbranch = self._campo(grid_tipos, 1, 2, '952$b - Holdingbranch:', self.var_holdingbranch.get(), ancho=12)
+        self.entry_holdingbranch = self._campo(grid_tipos, 3, 0, '952$b - Holdingbranch:', self.var_holdingbranch.get(), ancho=12)
 
-        ttk.Button(f, text='Guardar configuracion', command=self._guardar_config).pack(pady=10)
+
 
     def _crear_pestana_log(self):
         f = self.frame_log
@@ -291,7 +285,11 @@ class MigracionApp:
         self.txt_status.insert('1.0', json.dumps(status_map, indent=2, ensure_ascii=False))
 
     def _guardar_config(self):
-        if not self._sesion_valida():
+        if not self._sesion_valida() or self.perfil_usuario != 'Administracion':
+            return
+        destino = self._destino_actual()
+        if not destino or not 1 <= destino['port'] <= 65535:
+            messagebox.showerror('Puerto no válido', 'El puerto debe estar entre 1 y 65535.')
             return
         try:
             branch_mapping = self._parsear_json_texto(self.txt_mapeo.get('1.0', tk.END), {})
@@ -400,18 +398,19 @@ class MigracionApp:
                                  lote_activo_id=self._lote_actual_id, detencion_solicitada=self._detencion_solicitada.is_set())
         if self.historial_lotes.solo_lectura:
             politica['iniciar'] = False
+        for accion, permiso in (('iniciar','iniciar_conversion'), ('detener','iniciar_conversion'),
+                                ('exportar','aprobar_exportacion')):
+            politica[accion] = politica[accion] and self.perfil_usuario in MATRIZ_PERMISOS[permiso]
         return politica
 
     def _actualizar_panel(self):
-        if not hasattr(self, 'panel_lotes') or not hasattr(self, 'btn_exportar'):
+        if not hasattr(self, 'entry_db'):
             return
         self.panel_lotes.actualizar()
-        lote = self.historial_lotes.obtener(self._lote_actual_id)
-        self.btn_exportar.configure(state='normal' if self._politica_lote(lote)['exportar'] else 'disabled')
-        self.btn_ejecutar.configure(state='disabled' if self.migracion_en_curso or self.historial_lotes.solo_lectura else 'normal')
-        politica = self._politica_lote(lote)
-        self.btn_detener.configure(state='normal' if politica['detener'] else 'disabled',
-                                  text='Deteniendo…' if politica['detencion_solicitada'] else 'Detener migración')
+        permitir = (not self.migracion_en_curso and not self.historial_lotes.solo_lectura
+                    and self.perfil_usuario in MATRIZ_PERMISOS['validar_access'])
+        self.panel_lotes.nuevo.configure(state='normal' if permitir else 'disabled')
+        self.abrir_ajustes.configure(state='disabled' if self.migracion_en_curso else 'normal')
 
     def _solicitar_detencion(self, identificador=None):
         identificador = identificador or self._lote_actual_id
@@ -420,7 +419,6 @@ class MigracionApp:
             return
         self._detencion_solicitada.set()
         self.log(f'Lote {identificador}: detención solicitada por el usuario.')
-        self.lbl_estado.configure(text='Detención solicitada. Terminando la ficha u operación en curso…')
         self._actualizar_panel()
 
     def _iniciar_desde_panel(self, identificador):
@@ -429,6 +427,8 @@ class MigracionApp:
             messagebox.showwarning('Acción no disponible', 'Valida el respaldo seleccionado antes de iniciar ese lote.')
             return
         self._lote_actual_id = identificador
+        self.var_limite.set(str(lote.total_objetivo))
+        self.var_saltar_existentes.set(lote.omitir_existentes)
         self._iniciar_migracion()
 
     def cerrar(self):
@@ -437,8 +437,6 @@ class MigracionApp:
             return
         self._cerrando = True
         self.root.after_cancel(self._after_ui)
-        if self.mysql_writer:
-            self.mysql_writer.close()
         self.root.destroy()
 
     def _sesion_valida(self) -> bool:
@@ -452,6 +450,11 @@ class MigracionApp:
             return False
 
     def _cerrar_sesion(self):
+        if self.migracion_en_curso:
+            messagebox.showwarning('Migración en curso', 'Detén el lote antes de cerrar la sesión.')
+            return
+        self._cerrando = True
+        self.root.after_cancel(self._after_ui)
         if self.auth_service is not None:
             self.auth_service.logout(self.session_token)
         if self.on_logout is not None:
@@ -583,85 +586,71 @@ class MigracionApp:
             messagebox.showwarning('Atencion', 'Seleccione primero un archivo .mdb o .accdb')
             return
         try:
+            limite = int(self.var_limite.get())
+            if limite < 0:
+                raise ValueError('El límite debe ser cero o un entero positivo.')
             errores = self._validar_archivo_access(path)
             if errores:
                 raise ValueError('\n'.join(errores))
 
             reader = AccessReader(path)
-            if reader.test_connection():
+            try:
                 total = reader.contar_fichas()
+            finally:
                 reader.close()
-                lote = self.historial_lotes.recibir(path, total)
-                self._lote_actual_id = lote.id
-                self._validacion_access = self._firma_access(path)
-                self.panel_lotes.seleccionar_real(lote.id)
-                self._actualizar_panel()
-                self.lbl_conteo_access.config(text='Registros FICHAS: ' + str(total))
-                self.log('[OK] Conexion Access exitosa. ' + str(total) + ' fichas encontradas.')
-                messagebox.showinfo('Exito', 'Conexion Access exitosa.\n' + str(total) + ' registros en FICHAS.')
-            else:
-                raise Exception('No se pudo conectar.')
+            lote = self.historial_lotes.recibir(path, total)
+            self._lote_actual_id = lote.id
+            self.historial_lotes.actualizar(lote.id, total_objetivo=min(limite, total) if limite else total,
+                omitir_existentes=self.var_saltar_existentes.get())
+            self._validacion_access = self._firma_access(path)
+            self.panel_lotes.seleccionar_real(lote.id)
+            self._actualizar_panel()
+            self.lbl_conteo_access.config(text='Registros FICHAS: ' + str(total))
+            self.log('[OK] Conexion Access exitosa. ' + str(total) + ' fichas encontradas.')
+            self.notebook.select(self.panel_lotes)
         except Exception as e:
             self.log('[ERROR] Access: ' + str(e))
             messagebox.showerror('Error', 'No se pudo conectar a Access:\n' + str(e))
 
-    def _probar_mysql(self):
-        if not self._sesion_valida():
-            return
-        config = {
-            'host': self.entry_host.get(),
-            'port': int(self.entry_port.get() or 3306),
-            'user': self.entry_user.get(),
-            'password': self.entry_pass.get(),
-            'database': self.entry_db.get(),
-            'charset': 'utf8mb4',
-        }
-        try:
-            writer = MySQLWriter(config)
-            if writer.test_connection():
-                writer.crear_tablas()
-                self.mysql_writer = writer
-                stats = self._obtener_stats_mysql(config)
-                self.lbl_conteo_mysql.config(text='Registros migrados: ' + str(stats['total_registros']))
-                self.log('[OK] Conexion MySQL exitosa. Tablas verificadas.')
-                messagebox.showinfo('Exito', 'Conexion MySQL exitosa y tablas creadas/verificadas.')
-            else:
-                raise Exception('No se pudo conectar.')
-        except Exception as e:
-            msg = str(e)
-            if 'Unknown database' in msg or 'unknown database' in msg:
-                crear = messagebox.askyesno(
-                    'Base de datos no existe',
-                    f'La base de datos "{config["database"]}" no existe.\n\n'
-                    '¿Quieres crearla automáticamente?'
-                )
-                if crear:
-                    try:
-                        writer = MySQLWriter(config)
-                        writer.ensure_database()
-                        writer.crear_tablas()
-                        self.mysql_writer = writer
-                        stats = self._obtener_stats_mysql(config)
-                        self.lbl_conteo_mysql.config(text='Registros migrados: ' + str(stats['total_registros']))
-                        self.log('[OK] Base de datos creada y tablas verificadas.')
-                        messagebox.showinfo('Exito', 'Base de datos creada y tablas verificadas.')
-                    except Exception as e2:
-                        self.log('[ERROR] MySQL: ' + str(e2))
-                        messagebox.showerror('Error', 'No se pudo crear la base de datos:\n' + str(e2))
-                else:
-                    self.log('[INFO] Usuario canceló la creación de la base de datos.')
-            else:
-                self.log('[ERROR] MySQL: ' + msg)
-                messagebox.showerror('Error', 'No se pudo conectar a MySQL:\n' + msg)
+    def _mysql_verificado(self):
+        self.estado_mysql.set('MySQL · conexión verificada')
 
-    def _obtener_stats_mysql(self, config: Dict) -> Dict:
+    def _probar_mysql(self):
+        if not self._sesion_valida() or self.perfil_usuario != 'Administracion':
+            return
+        self.estado_mysql.set('MySQL · sin verificar')
+        writer = None
         try:
+            config = self._destino_actual()
+            if not config or not 1 <= config['port'] <= 65535:
+                raise ValueError('El puerto debe estar entre 1 y 65535.')
+            config.update(user=self.entry_user.get(), password=self.entry_pass.get())
             writer = MySQLWriter(config)
+            try:
+                writer.connect()
+            except Exception as exc:
+                if not exc.args or exc.args[0] != 1049:
+                    raise
+                if not messagebox.askyesno('Base de datos inexistente', '¿Crear la base indicada en este servidor?'):
+                    return
+                writer.ensure_database()
+            writer.crear_tablas()
             stats = writer.obtener_estadisticas()
-            writer.close()
-            return stats
-        except Exception:
-            return {'total_registros': 0, 'total_ejemplares': 0, 'por_estado': {}}
+            self.lbl_conteo_mysql.config(text=f"Registros migrados: {stats['total_registros']}")
+            self._mysql_verificado()
+            self.log('[OK] Conexión MySQL y tablas verificadas.')
+            messagebox.showinfo('Conexión verificada', 'El destino MySQL está disponible.')
+        except Exception as exc:
+            self.estado_mysql.set('MySQL · revisar conexión')
+            mensaje = str(exc)
+            clave = self.entry_pass.get()
+            if clave:
+                mensaje = mensaje.replace(clave, '***')
+            self.log('[ERROR] MySQL: '+mensaje)
+            messagebox.showerror('Error de conexión', mensaje)
+        finally:
+            if writer:
+                writer.close()
 
     def _iniciar_migracion(self):
         if not self._sesion_valida():
@@ -762,7 +751,8 @@ class MigracionApp:
         try:
             self.historial_lotes.actualizar(lote.id, estado='en_proceso', etapa='conexion',
                 total_objetivo=min(total, limite) if limite else total, destino=self._destino_actual(),
-                version_mapeo=self.marc_converter.mapping_version,
+                usuario=self.auth_service.nombre_usuario(self.session_token) if self.auth_service else None,
+                resultados=[], version_mapeo=self.marc_converter.mapping_version,
                 huella_mapeo=huella_mapeo,
                 evento=(f'Migración iniciada con mapeo MARC21 versión '
                         f'{self.marc_converter.mapping_version} '
@@ -772,12 +762,6 @@ class MigracionApp:
             return
         self.migracion_en_curso = True
         self._detencion_solicitada.clear()
-        self.btn_ejecutar.config(state='disabled')
-        self.progress['value'] = 0
-        self.lbl_estado.config(text='Iniciando...')
-        self.btn_exportar.configure(state='disabled')
-        for frame in (self.frame_conexion, self.frame_config):
-            self.notebook.tab(frame, state='disabled')
         self._actualizar_panel()
         self.notebook.select(self.panel_lotes)
 
@@ -799,6 +783,7 @@ class MigracionApp:
                             branch_mapping, status_mapping, lote_id):
         reader = writer = None
         cont_ok = cont_err = cont_omitidos = cont_ejemplares = 0
+        resultados = []
         fichas_correctas = []
         incidencias = []
         ultimo_avance = monotonic()
@@ -811,7 +796,7 @@ class MigracionApp:
         def guardar_avance(**extra):
             self.historial_lotes.actualizar(lote_id, correctos=cont_ok, errores=cont_err,
                 omitidos=cont_omitidos, ejemplares=cont_ejemplares,
-                fichas_correctas=fichas_correctas, incidencias=incidencias[-100:], **extra)
+                fichas_correctas=fichas_correctas, resultados=resultados, incidencias=incidencias[-100:], **extra)
             self._publicar_ui(self._mostrar_avance_lote, lote_id)
 
         def comprobar_detencion():
@@ -824,6 +809,7 @@ class MigracionApp:
             writer = MySQLWriter(config_mysql)
             comprobar_detencion()
             writer.connect()
+            self._publicar_ui(self._mysql_verificado)
             comprobar_detencion()
             writer.crear_tablas()
             comprobar_detencion()
@@ -842,11 +828,14 @@ class MigracionApp:
             guardar_avance(etapa='conversion', evento='Convirtiendo fichas a MARC21 y guardando ejemplares.')
             for idx, ficha in enumerate(fichas, start=1):
                 comprobar_detencion()
+                inicio_incidencias = len(incidencias)
+                estado_ficha = 'Rechazada'
                 id_ficha = None
                 try:
                     id_ficha = int(ficha['Ficha_No'])
                     if saltar and writer.registrar_existe(id_ficha):
                         cont_omitidos += 1
+                        estado_ficha = 'Omitida'
                     else:
                         ejemplares = reader.leer_ejemplares_por_ficha([id_ficha]).get(id_ficha, [])
                         incidencias_conversion = []
@@ -865,29 +854,31 @@ class MigracionApp:
                             )
                         marcxml = self.marc_converter.record_a_marcxml(record)
                         iso2709 = self.marc_converter.record_a_iso2709(record)
-                        id_registro = writer.insertar_registro_marc(id_ficha, str(id_ficha), marcxml, iso2709)
-                        for ej in ejemplares:
-                            biblioteca = ej.get('Biblioteca')
-                            bc = str(biblioteca).strip() if biblioteca is not None else ''
-                            branch_code = branch_mapping.get(bc) if bc else None
-                            if not bc:
-                                mensaje = 'Faltante: Biblioteca no tiene valor; no se asignó una sucursal Koha.'
-                            elif branch_code is None:
-                                mensaje = (
-                                    f'No contemplado: Biblioteca={bc!r} no tiene correspondencia '
-                                    'autorizada; no se asignó una sucursal Koha.'
-                                )
-                            else:
-                                mensaje = None
-                            if mensaje:
-                                incidencias.append({
-                                    'referencia': referencia + ' · Biblioteca',
-                                    'mensaje': mensaje,
-                                })
-                                self.log(f'[AVISO] Lote {lote_id}, {referencia}: {mensaje}')
-                            writer.insertar_ejemplar(id_registro, id_ficha, ej, branch_code,
-                                                    signatura=ficha.get('Clasificacion'))
-                            cont_ejemplares += 1
+                        with writer.transaccion_ficha():
+                            id_registro = writer.insertar_registro_marc(id_ficha, str(id_ficha), marcxml, iso2709)
+                            for ej in ejemplares:
+                                biblioteca = ej.get('Biblioteca')
+                                bc = str(biblioteca).strip() if biblioteca is not None else ''
+                                branch_code = branch_mapping.get(bc) if bc else None
+                                if not bc:
+                                    mensaje = 'Faltante: Biblioteca no tiene valor; no se asignó una sucursal Koha.'
+                                elif branch_code is None:
+                                    mensaje = (
+                                        f'No contemplado: Biblioteca={bc!r} no tiene correspondencia '
+                                        'autorizada; no se asignó una sucursal Koha.'
+                                    )
+                                else:
+                                    mensaje = None
+                                if mensaje:
+                                    incidencias.append({
+                                        'referencia': referencia + ' · Biblioteca',
+                                        'mensaje': mensaje,
+                                    })
+                                    self.log(f'[AVISO] Lote {lote_id}, {referencia}: {mensaje}')
+                                writer.insertar_ejemplar(id_registro, id_ficha, ej, branch_code,
+                                                        signatura=ficha.get('Clasificacion'))
+                        cont_ejemplares += len(ejemplares)
+                        estado_ficha = 'Convertida'
                         cont_ok += 1
                         fichas_correctas.append(id_ficha)
                 except Exception as exc:
@@ -899,6 +890,11 @@ class MigracionApp:
                         writer.insertar_log('ERROR', mensaje, id_ficha=id_ficha)
                     except Exception:
                         pass
+                resultados.append({
+                    'id': id_ficha, 'referencia': f'Ficha {id_ficha}' if id_ficha is not None else f'Fila {idx}',
+                    'titulo': str(ficha.get('Titulo') or ''), 'estado': estado_ficha,
+                    'motivos': [f"{i['referencia']}: {i['mensaje']}" for i in incidencias[inicio_incidencias:]],
+                })
                 if idx % 25 == 0 or idx == total_fichas or monotonic() - ultimo_avance >= 0.5:
                     guardar_avance()
                     ultimo_avance = monotonic()
@@ -946,21 +942,10 @@ class MigracionApp:
                         pass
 
     def _mostrar_avance_lote(self, identificador):
-        lote = self.historial_lotes.obtener(identificador)
-        if lote is None:
-            return
-        self.progress['value'] = lote.progreso
-        estado = {'con_incidencias': 'Con incidencias', 'concluido': 'Concluido', 'detenido': 'Detenido'}.get(lote.estado, 'En proceso')
-        if lote.estado == 'en_proceso' and self._detencion_solicitada.is_set():
-            estado = 'Deteniendo al terminar la ficha u operación en curso…'
-        self.lbl_estado.config(text=f'{lote.id}: {lote.procesados}/{lote.total_objetivo} · {estado}')
-        self.lbl_stats.config(text=f'Correctos: {lote.correctos} | Omitidos: {lote.omitidos} | Errores: {lote.errores} | Incidencias: {len(lote.incidencias)} | Ejemplares: {lote.ejemplares}')
         self._actualizar_panel()
 
     def _finalizar_migracion(self):
         self.migracion_en_curso = False
-        for frame in (self.frame_conexion, self.frame_config):
-            self.notebook.tab(frame, state='normal')
         self._actualizar_panel()
 
     def _exportar_marcxml(self, lote_id=None):
@@ -995,36 +980,10 @@ class MigracionApp:
                       'password': self.entry_pass.get(), 'charset': 'utf8mb4'}
             writer = MySQLWriter(config)
             writer.connect()
-            filas = []
-            for inicio in range(0, len(lote.fichas_correctas), 500):
-                fichas = lote.fichas_correctas[inicio:inicio + 500]
-                parametros = ','.join(['%s'] * len(fichas))
-                with writer.conn.cursor() as cur:
-                    cur.execute('SELECT marca_marcxml FROM registros_marc '
-                                f'WHERE id_ficha_acceso IN ({parametros}) ORDER BY id_ficha_acceso', tuple(fichas))
-                    filas.extend(cur.fetchall())
-            if len(filas) != lote.correctos:
-                raise ValueError('El destino ya no contiene todos los registros correctos de este lote. No se exportó el archivo.')
-
-            registros = []
-            for fila in filas:
-                xml = fila['marca_marcxml']
-                start = xml.find('<record>')
-                end = xml.find('</record>')
-                if start == -1 or end == -1:
-                    raise ValueError('Un registro no contiene el MARCXML esperado. Revisa el destino antes de exportar.')
-                registros.append(xml[start:end + len('</record>')])
-
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
-                f.write('<collection xmlns="http://www.loc.gov/MARC21/slim">\n')
-                for record_xml in registros:
-                    f.write(record_xml + '\n')
-                f.write('</collection>\n')
-
-            self.historial_lotes.actualizar(lote.id, evento=f'Se exportaron {len(filas)} registros correctos a MARCXML.')
+            exportar_lote(writer.conn, lote.fichas_correctas, path)
+            self.historial_lotes.actualizar(lote.id, evento=f'Se exportaron {lote.correctos} registros correctos a MARCXML.')
             self._actualizar_panel()
-            messagebox.showinfo('Exito', f'Exportados {len(filas)} registros del lote {lote.id} a {path}')
+            messagebox.showinfo('Exito', f'Exportados {lote.correctos} registros del lote {lote.id} a {path}')
         except Exception as e:
             clave = self.entry_pass.get()
             mensaje = str(e).replace(clave, '***') if clave else str(e)

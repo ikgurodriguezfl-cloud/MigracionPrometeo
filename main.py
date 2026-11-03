@@ -40,8 +40,6 @@ def main():
 
         # Ajustar titulo y tamanio para la pantalla principal
         root.title('Prometeo Migrator - Access a MARC21 (Koha)')
-        root.geometry('900x650')
-        root.minsize(800, 600)
         root.resizable(True, True)
 
         # Cargar la aplicacion principal

@@ -5,7 +5,27 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from lotes import HistorialLotes, acciones_lote, lotes_de_ejemplo
+from lotes import HistorialLotes, Lote, acciones_lote
+
+def lotes_de_ejemplo():
+    """Escenarios aislados; nunca se guardan ni se ejecutan como migraciones."""
+    resultado = []
+    for indice, (estado, etapa, correctos, omitidos, errores) in enumerate((
+        ('en_espera', 'recepcion', 0, 0, 0),
+        ('en_proceso', 'conversion', 54, 6, 0),
+        ('concluido', 'finalizado', 90, 10, 0),
+        ('con_incidencias', 'revision', 80, 5, 10),
+    ), start=1):
+        lote = Lote(f'EJEMPLO-{indice:02}', f'Colección de ejemplo {indice}.mdb', 100, 100,
+                    estado=estado, etapa=etapa, correctos=correctos, omitidos=omitidos, errores=errores,
+                    fichas_correctas=list(range(1, correctos + 1)))
+        if errores:
+            lote.incidencias = [{'referencia': 'Ficha de ejemplo', 'mensaje': 'Falta información para convertir el registro. El detalle de este escenario es ilustrativo.'}]
+        lote.evento('Escenario de demostración; no representa una migración real.')
+        lote.validar()
+        resultado.append(lote)
+    return resultado
+
 
 
 class LotesTests(unittest.TestCase):

@@ -26,7 +26,7 @@ class AccessReader:
         self.driver = driver
         self.conn_str = (
             f"DRIVER={driver};"
-            f"DBQ={mdb_path};"
+            f"DBQ={mdb_path};ReadOnly=1;"
         )
         self._conn = None
 

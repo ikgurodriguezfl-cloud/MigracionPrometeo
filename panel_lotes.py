@@ -1,275 +1,275 @@
-"""Panel Tkinter del sprint 2, integrado en el Notebook de MigracionApp."""
-from dataclasses import asdict
-from datetime import datetime
+"""Consulta y control de lotes reales dentro de la ventana principal."""
 import json
-import os
-import tkinter as tk
+from dataclasses import asdict
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+import tkinter as tk
 
-from lotes import ESTADOS, ETAPAS, lotes_de_ejemplo
+from lotes import ESTADOS, ETAPAS
+
+PAGINA = 50
 
 
 class PanelLotes(ttk.Frame):
     def __init__(self, parent, listar, politica, iniciar, exportar, conexiones, detener):
-        super().__init__(parent, padding=16, style='Panel.TFrame')
-        self.listar = listar
-        self.politica = politica
-        self.iniciar = iniciar
-        self.exportar = exportar
-        self.conexiones = conexiones
-        self.detener = detener
-        self.seleccionado = None
+        super().__init__(parent, padding=(10, 6))
+        self.listar, self.politica = listar, politica
+        self.iniciar, self.exportar, self.detener = iniciar, exportar, detener
         self.lotes = []
-        self.demo = tk.BooleanVar(value=False)
+        self.seleccionado = None
+        self.pagina = 0
         self.filtro = tk.StringVar(value='Todos')
         self.consulta = tk.StringVar()
-        self._estilos()
-        self._crear()
-        self.actualizar()
-
-    def _estilos(self):
-        estilo = ttk.Style(self)
-        estilo.configure('Panel.TFrame', background='#f5f6fa')
-        estilo.configure('Tarjeta.TFrame', background='#ffffff')
-        estilo.configure('Panel.TLabel', background='#f5f6fa', foreground='#777d91', font=('Segoe UI', 9))
-        estilo.configure('Titulo.Panel.TLabel', background='#f5f6fa', foreground='#29283e', font=('Segoe UI', 21, 'bold'))
-        estilo.configure('Tarjeta.TLabel', background='#ffffff', foreground='#6f7589', font=('Segoe UI', 9))
-        estilo.configure('Nombre.TLabel', background='#ffffff', foreground='#35324d', font=('Segoe UI', 14, 'bold'))
-        estilo.configure('Numero.TLabel', background='#ffffff', foreground='#7055c5', font=('Segoe UI', 20, 'bold'))
-        estilo.configure('Lotes.Treeview', rowheight=32, font=('Segoe UI', 9))
-        estilo.configure('Lotes.Treeview.Heading', font=('Segoe UI', 9, 'bold'))
-        estilo.configure('Lotes.Horizontal.TProgressbar', background='#8065ca', troughcolor='#ece8f6')
-
-    def _crear(self):
+        self.buscar_ficha = tk.StringVar()
+        self.tipo_ficha = tk.StringVar(value='Todas')
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(3, weight=1)
-        cabecera = ttk.Frame(self, style='Panel.TFrame')
-        cabecera.grid(row=0, column=0, sticky='ew', pady=(0, 12))
-        ttk.Label(cabecera, text='Panel de lotes', style='Titulo.Panel.TLabel').pack(side='left')
-        ttk.Button(cabecera, text='Configurar conexiones', command=self.conexiones).pack(side='right', padx=(8, 0))
-        ttk.Checkbutton(cabecera, text='Ver estados de ejemplo', variable=self.demo, command=self._cambiar_modo).pack(side='right')
-        self.aviso = ttk.Label(self, text='Consulta los lotes reales de esta aplicación.', style='Panel.TLabel')
-        self.aviso.grid(row=1, column=0, sticky='ew', pady=(0, 12))
+        self.rowconfigure(2, weight=1)
+        self.rowconfigure(4, weight=2)
 
-        metricas = ttk.Frame(self, style='Panel.TFrame')
-        metricas.grid(row=2, column=0, sticky='ew', pady=(0, 12))
+        cabecera = ttk.Frame(self)
+        cabecera.grid(row=0, column=0, sticky='ew')
+        resumen = ttk.Frame(cabecera)
+        resumen.pack(side='bottom', fill='x', pady=(3, 2))
         self.metricas = {}
-        for columna, (clave, etiqueta) in enumerate((('todos', 'Lotes registrados'), ('en_proceso', 'En proceso'), ('concluido', 'Concluidos'), ('con_incidencias', 'Con incidencias'))):
-            metricas.columnconfigure(columna, weight=1, uniform='metricas')
-            tarjeta = ttk.Frame(metricas, padding=10, style='Tarjeta.TFrame')
-            tarjeta.grid(row=0, column=columna, sticky='ew', padx=(0, 8 if columna < 3 else 0))
-            ttk.Label(tarjeta, text=etiqueta, style='Tarjeta.TLabel').pack(anchor='w')
-            valor = ttk.Label(tarjeta, text='0', style='Numero.TLabel')
-            valor.pack(anchor='w')
-            self.metricas[clave] = valor
+        for columna, (clave, texto) in enumerate((('en_espera', 'En espera'), ('en_proceso', 'En proceso'),
+                                                  ('concluido', 'Concluidos'), ('con_incidencias', 'Con incidencias'))):
+            tarjeta = ttk.Frame(resumen, padding=(5, 2), style='Marca.TFrame')
+            tarjeta.grid(row=0, column=columna, sticky='ew', padx=1)
+            resumen.columnconfigure(columna, weight=1, uniform='metricas')
+            numero = ttk.Label(tarjeta, style='Cifra.TLabel')
+            numero.pack(side='left')
+            ttk.Label(tarjeta, text=texto, style='Leyenda.TLabel').pack(side='left', padx=4)
+            self.metricas[clave] = numero
+        self.titulo = ttk.Label(cabecera, text='Lotes', style='Titulo.TLabel')
+        self.titulo.pack(side='left')
+        self.nuevo = ttk.Button(cabecera, text='Nuevo lote', command=conexiones, style='Principal.TButton')
+        self.nuevo.pack(side='right')
+        filtros = ttk.Frame(self)
+        filtros.grid(row=1, column=0, sticky='ew', pady=(3, 4))
+        ttk.Label(filtros, text='Buscar lote').pack(side='left')
+        ttk.Entry(filtros, textvariable=self.consulta, width=14).pack(side='left', fill='x', expand=True, padx=5)
+        ttk.Combobox(filtros, textvariable=self.filtro, values=['Todos', *ESTADOS.values()],
+                     width=15, state='readonly').pack(side='right')
 
-        cuerpo = ttk.Panedwindow(self, orient='horizontal')
-        cuerpo.grid(row=3, column=0, sticky='nsew')
-        listado = ttk.Frame(cuerpo, padding=8, style='Tarjeta.TFrame')
-        detalle = ttk.Frame(cuerpo, padding=16, style='Tarjeta.TFrame')
-        cuerpo.add(listado, weight=3)
-        cuerpo.add(detalle, weight=2)
-        listado.columnconfigure(0, weight=1)
-        listado.rowconfigure(1, weight=1)
-        filtros = ttk.Frame(listado, style='Tarjeta.TFrame')
-        filtros.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 8))
-        ttk.Label(filtros, text='Lotes de migración', style='Tarjeta.TLabel').pack(anchor='w', pady=(0, 6))
-        combo = ttk.Combobox(filtros, textvariable=self.filtro, values=['Todos'] + list(ESTADOS.values()), state='readonly', width=17)
-        combo.pack(side='left', padx=(0, 8))
-        combo.bind('<<ComboboxSelected>>', lambda _: self._pintar_tabla())
-        entrada = ttk.Entry(filtros, textvariable=self.consulta)
-        entrada.pack(side='left', fill='x', expand=True)
-        ttk.Label(filtros, text='Filtrar', style='Tarjeta.TLabel').pack(side='left', padx=(5, 0))
-        self.consulta.trace_add('write', lambda *_: self._pintar_tabla())
-        self.tabla = ttk.Treeview(listado, columns=('lote', 'estado', 'avance', 'total'), show='headings', selectmode='browse', style='Lotes.Treeview')
-        for columna, titulo, ancho in (('lote', 'Lote / origen', 240), ('estado', 'Estado', 130), ('avance', 'Avance', 70), ('total', 'Recibidos', 75)):
-            self.tabla.heading(columna, text=titulo)
-            self.tabla.column(columna, width=ancho, minwidth=65, stretch=columna == 'lote', anchor='w')
-        self.tabla.grid(row=1, column=0, sticky='nsew')
-        scroll = ttk.Scrollbar(listado, orient='vertical', command=self.tabla.yview)
-        scroll.grid(row=1, column=1, sticky='ns')
-        horizontal = ttk.Scrollbar(listado, orient='horizontal', command=self.tabla.xview)
-        horizontal.grid(row=2, column=0, sticky='ew')
-        self.tabla.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
-        for estado, color in (('en_espera', '#777d91'), ('en_proceso', '#477bbb'), ('concluido', '#358265'), ('con_incidencias', '#a36d23'), ('detenido', '#956c42')):
+        lista = ttk.Frame(self)
+        lista.grid(row=2, column=0, sticky='nsew')
+        self.tabla = ttk.Treeview(lista, columns=('origen', 'estado', 'avance'), show='headings',
+                                  selectmode='browse', height=3)
+        for clave, titulo, ancho in [('origen','Origen del lote',190),('estado','Estado',110),('avance','Avance',65)]:
+            self.tabla.heading(clave, text=titulo)
+            self.tabla.column(clave, width=ancho, minwidth=42, stretch=clave == 'origen')
+        barra = ttk.Scrollbar(lista, command=self.tabla.yview)
+        barra.pack(side='right', fill='y')
+        self.tabla.configure(yscrollcommand=barra.set)
+        self.tabla.pack(fill='both', expand=True)
+        for estado,color in (('en_proceso','#1e5369'), ('concluido','#1f6645'), ('con_incidencias','#8d4124')):
             self.tabla.tag_configure(estado, foreground=color)
         self.tabla.bind('<<TreeviewSelect>>', self._seleccionar)
-        self.sin_lotes = ttk.Label(listado, style='Tarjeta.TLabel', wraplength=430)
-        self.sin_lotes.grid(row=3, column=0, columnspan=2, sticky='ew', pady=(8, 0))
+        for variable in (self.filtro, self.consulta):
+            variable.trace_add('write', lambda *_: self._pintar_tabla())
 
-        detalle.columnconfigure(0, weight=1)
-        self.identificador = ttk.Label(detalle, style='Tarjeta.TLabel')
-        self.identificador.grid(row=0, column=0, sticky='w')
-        self.nombre = ttk.Label(detalle, style='Nombre.TLabel', wraplength=340)
-        self.nombre.grid(row=1, column=0, sticky='ew', pady=(4, 8))
-        self.estado = ttk.Label(detalle, style='Tarjeta.TLabel')
-        self.estado.grid(row=2, column=0, sticky='ew')
-        self.etapa = ttk.Label(detalle, style='Tarjeta.TLabel')
-        self.etapa.grid(row=3, column=0, sticky='ew', pady=(4, 8))
-        self.barra = ttk.Progressbar(detalle, maximum=100, style='Lotes.Horizontal.TProgressbar')
-        self.barra.grid(row=4, column=0, sticky='ew')
-        self.conteos = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=350)
-        self.conteos.grid(row=5, column=0, sticky='ew', pady=(7, 10))
-        self.siguiente = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=350)
-        self.siguiente.grid(row=6, column=0, sticky='ew', pady=(0, 12))
-        acciones = ttk.Frame(detalle, style='Tarjeta.TFrame')
-        acciones.grid(row=7, column=0, sticky='ew')
-        control = ttk.Frame(acciones, style='Tarjeta.TFrame')
-        control.pack(fill='x', pady=3)
-        self.btn_iniciar = ttk.Button(control, text='Ejecutar migración', command=self._iniciar)
-        self.btn_iniciar.pack(side='left', fill='x', expand=True, padx=(0, 4))
-        self.btn_detener = ttk.Button(control, text='Detener migración', command=self._detener)
-        self.btn_detener.pack(side='left', fill='x', expand=True)
-        self.btn_exportar = ttk.Button(acciones, text='Exportar MARCXML del lote', command=self._exportar)
-        self.btn_exportar.pack(fill='x', pady=3)
-        fila = ttk.Frame(acciones, style='Tarjeta.TFrame')
-        fila.pack(fill='x', pady=3)
-        self.btn_incidencias = ttk.Button(fila, text='Ver incidencias', command=self._incidencias)
-        self.btn_incidencias.pack(side='left', fill='x', expand=True, padx=(0, 4))
-        self.btn_resumen = ttk.Button(fila, text='Guardar resumen', command=self._resumen)
-        self.btn_resumen.pack(side='left', fill='x', expand=True)
-        self.actualizado = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=350)
-        self.actualizado.grid(row=8, column=0, sticky='ew', pady=(12, 0))
-        ttk.Button(self, text='Ver actividad del lote', command=self._actividad).grid(row=4, column=0, sticky='e', pady=(10, 0))
+        estado = ttk.Frame(self)
+        estado.grid(row=3, column=0, sticky='ew', pady=4)
+        self.identificador = ttk.Label(estado, text='Selecciona un lote')
+        self.identificador.pack(side='left')
+        self.barra = ttk.Progressbar(estado, length=76)
+        self.barra.pack(side='right', padx=3)
+        self.vistas = ttk.Notebook(self)
+        self.vistas.grid(row=4, column=0, sticky='nsew')
+        self.textos = {}
+        self.paginas = {}
+        for nombre in ('Resumen', 'Fichas', 'Incidencias', 'Actividad'):
+            marco = ttk.Frame(self.vistas, padding=5)
+            self.vistas.add(marco, text=nombre)
+            if nombre == 'Fichas':
+                busqueda = ttk.Frame(marco)
+                busqueda.pack(fill='x')
+                ttk.Label(busqueda, text='Buscar').pack(side='left')
+                ttk.Entry(busqueda, textvariable=self.buscar_ficha, width=10).pack(side='left', expand=True, fill='x', padx=4)
+                ttk.Combobox(busqueda, textvariable=self.tipo_ficha, width=15, state='readonly',
+                             values=('Todas','Convertidas','Con incidencias','Rechazadas','Omitidas')).pack(side='left')
+            if nombre in ('Fichas','Incidencias'):
+                nav = ttk.Frame(marco)
+                nav.pack(side='bottom', fill='x')
+                ttk.Button(nav, text='‹', width=3, command=lambda: self._avanzar(-1)).pack(side='left')
+                ttk.Button(nav, text='›', width=3, command=lambda: self._avanzar(1)).pack(side='right')
+                self.paginas[nombre] = tk.StringVar()
+                ttk.Label(nav, textvariable=self.paginas[nombre], anchor='center').pack(fill='x')
+            texto = tk.Text(marco, height=3, width=20, wrap='word', font='TkTextFont', relief='flat',
+                            padx=7, pady=4, state='disabled', background='white')
+            scroll = ttk.Scrollbar(marco, command=texto.yview)
+            scroll.pack(side='right', fill='y')
+            texto.configure(yscrollcommand=scroll.set)
+            texto.pack(fill='both', expand=True)
+            self.textos[nombre] = texto
+        self.vistas.bind('<<NotebookTabChanged>>', self._reiniciar_pagina)
+        for var in (self.buscar_ficha, self.tipo_ficha):
+            var.trace_add('write', self._reiniciar_pagina)
 
-    def _cambiar_modo(self):
-        self.seleccionado = None
-        self.actualizar()
+        # Fila reservada: sólo la lista y el detalle ceden altura al reducir la ventana.
+        pie = ttk.Frame(self)
+        pie.grid(row=5, column=0, sticky='ew', pady=(6, 0))
+        self.botones = {}
+        for i, (accion, titulo, cmd) in enumerate((
+                ('iniciar','Ejecutar',self.iniciar), ('detener','Detener',self.detener),
+                ('exportar','Exportar MARCXML',self.exportar), ('resumen','Guardar resumen',self._resumen))):
+            boton = ttk.Button(pie, text=titulo, width=1,
+                               command=lambda a=accion,c=cmd: self._accion(a,c))
+            boton.grid(row=0,column=i,sticky='ew',padx=1)
+            pie.columnconfigure(i, weight=2 if i > 1 else 1)
+            self.botones[accion] = boton
+        self.btn_iniciar = self.botones['iniciar']
+        self.btn_detener = self.botones['detener']
+        self.btn_exportar = self.botones['exportar']
+        self.btn_resumen = self.botones['resumen']
 
-    def actualizar(self, seleccionar=None):
-        self.lotes = lotes_de_ejemplo() if self.demo.get() else self.listar()
-        self.aviso.config(text='DEMOSTRACIÓN: datos de ejemplo. No se ejecutan ni exportan migraciones reales.' if self.demo.get() else 'Historial de la aplicación. El avance se actualiza durante la migración.')
-        for clave, widget in self.metricas.items():
-            widget.config(text=str(len(self.lotes) if clave == 'todos' else sum(lote.estado == clave for lote in self.lotes)))
-        if seleccionar and not self.demo.get():
-            self.seleccionado = seleccionar
-        if not any(lote.id == self.seleccionado for lote in self.lotes):
-            preferido = next((lote for lote in self.lotes if lote.estado == 'en_proceso'), self.lotes[0] if self.lotes else None)
-            self.seleccionado = preferido.id if preferido else None
-        self._pintar_tabla()
+    def _avanzar(self, paso):
+        self.pagina = max(0, self.pagina + paso)
         self._pintar_detalle()
 
+    def _reiniciar_pagina(self, *_):
+        self.pagina = 0
+        self._pintar_detalle()
+
+    def actualizar(self, seleccionar=None):
+        self.lotes = self.listar()
+        for estado, etiqueta in self.metricas.items():
+            etiqueta.configure(text=str(sum(lote.estado == estado for lote in self.lotes)))
+        if seleccionar:
+            self.seleccionado = seleccionar
+        self._pintar_tabla()
+
     def seleccionar_real(self, identificador):
-        self.demo.set(False)
-        self.filtro.set('Todos')
         self.consulta.set('')
+        self.filtro.set('Todos')
         self.actualizar(identificador)
 
     def _pintar_tabla(self):
-        self.tabla.delete(*self.tabla.get_children())
-        consulta = self.consulta.get().strip().casefold()
-        visibles = []
-        for lote in self.lotes:
-            if self.filtro.get() not in ('Todos', ESTADOS[lote.estado]):
-                continue
-            if consulta and consulta not in (lote.id + ' ' + lote.fuente).casefold():
-                continue
-            self.tabla.insert('', 'end', iid=lote.id, values=(f'{lote.id} · {os.path.basename(lote.fuente)}', ESTADOS[lote.estado], f'{lote.progreso:g} %', f'{lote.total_recibidos:,}'), tags=(lote.estado,))
-            visibles.append(lote.id)
-        if self.seleccionado in visibles:
+        filtro = self.filtro.get()
+        consulta = self.consulta.get().casefold()
+        visibles = [lote for lote in self.lotes if filtro in ('Todos', ESTADOS[lote.estado])
+                    and consulta in (lote.id + ' ' + lote.fuente).casefold()]
+        ids = {lote.id for lote in visibles}
+        for item in self.tabla.get_children():
+            if item not in ids:
+                self.tabla.delete(item)
+        for pos, lote in enumerate(visibles):
+            valores = (Path(lote.fuente).name, ESTADOS[lote.estado], f'{lote.progreso:g} %')
+            if self.tabla.exists(lote.id):
+                self.tabla.item(lote.id, values=valores, tags=(lote.estado,))
+            else:
+                self.tabla.insert('', pos, iid=lote.id, values=valores, tags=(lote.estado,))
+        if self.seleccionado not in ids:
+            self.seleccionado = visibles[0].id if visibles else None
+            self.pagina = 0
+        if self.seleccionado and self.tabla.selection() != (self.seleccionado,):
             self.tabla.selection_set(self.seleccionado)
-        self.sin_lotes.config(text='Sin lotes todavía. En Conexiones selecciona Access y pulsa Probar conexión para registrar un lote.' if not self.lotes else f'{len(visibles)} de {len(self.lotes)} lotes visibles. Selecciona una fila para consultar su detalle.')
+            self.tabla.see(self.seleccionado)
+        self.titulo.configure(text=f'Lotes · {len(self.lotes)}')
+        self._pintar_detalle()
 
-    def _seleccionar(self, _evento=None):
+    def _seleccionar(self, _evento):
         seleccion = self.tabla.selection()
-        if seleccion:
+        if seleccion and seleccion[0] != self.seleccionado:
             self.seleccionado = seleccion[0]
-            self._pintar_detalle()
+            self._reiniciar_pagina()
 
     def lote_actual(self):
         return next((lote for lote in self.lotes if lote.id == self.seleccionado), None)
 
-    def _pintar_detalle(self):
-        lote = self.lote_actual()
-        if lote is None:
-            self.identificador.config(text='NINGÚN LOTE SELECCIONADO')
-            self.nombre.config(text='Todo listo para comenzar')
-            for etiqueta in (self.estado, self.etapa, self.conteos, self.siguiente, self.actualizado):
-                etiqueta.config(text='')
-            self.barra['value'] = 0
+    def _filas(self, lote):
+        if lote.resultados is not None:
+            return lote.resultados
+        # Los lotes históricos sólo identifican las fichas guardadas.
+        return [dict(referencia=f'Ficha {i}', estado='Convertida', titulo='', motivos=[])
+                for i in lote.fichas_correctas]
+
+    def _contenido(self, vista, lote, politica):
+        if vista == 'Resumen':
+            return (f'{Path(lote.fuente).name}\n{ESTADOS[lote.estado]} · {ETAPAS[lote.etapa]}\n'
+                    f'Recibidos: {lote.total_recibidos}   ·   En esta ejecución: {lote.total_objetivo}\n'
+                    f'Convertidas: {lote.correctos}   ·   Omitidas: {lote.omitidos}   ·   Rechazadas: {lote.errores}   ·   Pendientes: {lote.pendientes}\n'
+                    f'Ejemplares: {lote.ejemplares}   ·   Usuario: {lote.usuario or "Sin registrar"}\n'
+                    f'Mapeo: {lote.version_mapeo or "Sin registrar"}   ·   Inicio: {lote.creado_en}\n'
+                    + {'en_espera':'Respaldo validado. Listo para ejecutar.',
+                       'en_proceso':'Detención solicitada.' if politica['detencion_solicitada'] else 'Migración en curso.',
+                       'con_incidencias':'Revisa las fichas señaladas en Incidencias.',
+                       'detenido':'Los avances se conservaron. Puedes guardar el resumen.',
+                       'concluido':'Puedes consultar las fichas y guardar el resultado.'}[lote.estado])
+        if vista == 'Actividad':
+            return '\n\n'.join(f"{i['fecha']}   {i['mensaje']}" for i in reversed(lote.actividad)) or 'Sin actividad registrada.'
+        if vista == 'Fichas':
+            filtro = self.tipo_ficha.get()
+            consulta = self.buscar_ficha.get().strip().casefold()
+            resultados = self._filas(lote)
+            if filtro == 'Con incidencias':
+                resultados = [fila for fila in resultados if fila['motivos']]
+            elif filtro != 'Todas':
+                resultados = [fila for fila in resultados if filtro == fila['estado'] + 's']
+            if consulta:
+                resultados = [fila for fila in resultados
+                              if consulta in (fila['referencia'] + ' ' + fila['titulo']).casefold()]
         else:
-            self.identificador.config(text=lote.id)
-            self.nombre.config(text=os.path.basename(lote.fuente))
-            self.estado.config(text='Estado: ' + ESTADOS[lote.estado])
-            self.etapa.config(text='Etapa: ' + ETAPAS[lote.etapa])
-            self.barra['value'] = lote.progreso
-            self.conteos.config(text=(f'Recibidos: {lote.total_recibidos:,}  ·  En esta ejecución: {lote.total_objetivo:,}\n'
-                f'Procesados: {lote.procesados:,} ({lote.progreso:g} %)  ·  Pendientes: {lote.pendientes:,}\n'
-                f'Correctos: {lote.correctos:,}  ·  Omitidos: {lote.omitidos:,}  ·  Errores: {lote.errores:,}\n'
-                f'Ejemplares guardados: {lote.ejemplares:,}\n'
-                f'Mapeo MARC21: {lote.version_mapeo or "no registrado"}'
-                f'{(" · SHA-256 " + lote.huella_mapeo) if lote.huella_mapeo else ""}'))
-            pasos = {
-                'en_espera': 'Siguiente paso: confirma conexiones y opciones, y ejecuta la migración. Si cambiaste el archivo, valida Access otra vez.',
-                'en_proceso': 'Procesamiento en curso. La exportación se habilita al concluir sin errores.',
-                'concluido': 'Procesamiento finalizado. Revisa el resumen antes de exportar los nuevos registros correctos del lote. Esto no importa a Koha.',
-                'con_incidencias': 'Revisa las incidencias y los registros pendientes. La exportación permanece bloqueada para evitar continuar antes de resolverlas.',
-                'detenido': 'Detenido por el usuario. Se conservaron los avances y quedan registros pendientes. Puedes guardar el resumen; este lote no se reanuda automáticamente.',
-            }
-            self.siguiente.config(text=pasos[lote.estado])
-            self.actualizado.config(text='Última actualización: ' + datetime.fromisoformat(lote.actualizado_en).strftime('%d/%m/%Y %H:%M:%S'))
-        politica = self.politica(lote, self.demo.get())
-        for accion, boton in (('iniciar', self.btn_iniciar), ('detener', self.btn_detener), ('exportar', self.btn_exportar), ('incidencias', self.btn_incidencias), ('resumen', self.btn_resumen)):
+            resultados = [motivo for fila in lote.resultados or [] for motivo in fila['motivos']]
+            for incidencia in lote.incidencias:
+                if lote.resultados is None or incidencia['referencia'] in ('Ejecución', 'Origen'):
+                    resultados.append(f"{incidencia['referencia']}: {incidencia['mensaje']}")
+        paginas = max(1, (len(resultados) + PAGINA - 1) // PAGINA)
+        self.pagina = min(self.pagina, paginas - 1)
+        etiqueta = 'resultado' if len(resultados) == 1 else 'resultados'
+        self.paginas[vista].set(f'{len(resultados)} {etiqueta} · {self.pagina + 1}/{paginas}')
+        inicio = self.pagina * PAGINA
+        lineas = resultados[inicio:inicio + PAGINA]
+        if vista == 'Fichas':
+            lineas = [self._texto_ficha(fila) for fila in lineas]
+        nota = 'Historial anterior: detalle parcial.\n' if lote.resultados is None and lote.procesados else ''
+        return nota + ('\n\n'.join(lineas) or 'Sin resultados.')
+
+    @staticmethod
+    def _texto_ficha(fila):
+        estado = fila['estado']
+        if estado == 'Convertida' and fila['motivos']:
+            estado = 'Convertida con incidencias'
+        encabezado = f"{fila['referencia']} · {estado}"
+        if fila['titulo']:
+            encabezado += ' · ' + fila['titulo']
+        return '\n    '.join([encabezado, *fila['motivos']])
+
+    def _pintar_detalle(self):
+        if not hasattr(self, 'botones'):
+            return
+        lote = self.lote_actual()
+        politica = self.politica(lote)
+        for accion, boton in self.botones.items():
             boton.configure(state='normal' if politica[accion] else 'disabled')
-        solicitada = politica['detencion_solicitada']
-        self.btn_detener.configure(text='Deteniendo…' if solicitada else 'Detener migración')
-        if solicitada:
-            self.siguiente.configure(text='Detención solicitada. Se terminará la ficha u operación en curso antes de guardar el último avance.')
+        self.btn_detener.configure(text='Deteniendo…' if politica['detencion_solicitada'] else 'Detener')
+        self.identificador.configure(text=lote.id if lote else 'Sin lote seleccionado')
+        self.barra['value'] = lote.progreso if lote else 0
+        vista = self.vistas.tab(self.vistas.select(), 'text')
+        contenido = self._contenido(vista, lote, politica) if lote else 'Selecciona un lote o pulsa Nuevo lote para validar un respaldo.'
+        if not lote and vista in self.paginas:
+            self.paginas[vista].set('')
+        texto = self.textos[vista]
+        if texto.get('1.0', 'end-1c') != contenido:
+            texto.configure(state='normal')
+            texto.delete('1.0', 'end')
+            texto.insert('1.0', contenido)
+            texto.configure(state='disabled')
 
-    def _iniciar(self):
+    def _accion(self, accion, funcion):
         lote = self.lote_actual()
-        if self.politica(lote, self.demo.get())['iniciar']:
-            self.iniciar(lote.id)
+        if lote and self.politica(lote)[accion]:
+            funcion(lote.id)
 
-    def _exportar(self):
+    def _resumen(self, identificador):
         lote = self.lote_actual()
-        if self.politica(lote, self.demo.get())['exportar']:
-            self.exportar(lote.id)
-
-    def _detener(self):
-        lote = self.lote_actual()
-        if self.politica(lote, self.demo.get())['detener']:
-            self.detener(lote.id)
-
-    def _ventana_texto(self, titulo, contenido):
-        ventana = tk.Toplevel(self)
-        ventana.title(titulo)
-        ventana.geometry('700x430')
-        ventana.transient(self.winfo_toplevel())
-        ventana.columnconfigure(0, weight=1)
-        ventana.rowconfigure(0, weight=1)
-        marco = ttk.Frame(ventana, padding=12)
-        marco.grid(row=0, column=0, sticky='nsew')
-        texto = tk.Text(marco, wrap='word', font=('Segoe UI', 10))
-        texto.pack(side='left', fill='both', expand=True)
-        barra = ttk.Scrollbar(marco, command=texto.yview)
-        barra.pack(side='right', fill='y')
-        texto.configure(yscrollcommand=barra.set)
-        texto.insert('1.0', contenido)
-        texto.configure(state='disabled')
-        ttk.Button(ventana, text='Cerrar', command=ventana.destroy).grid(row=1, column=0, pady=(0, 12))
-
-    def _incidencias(self):
-        lote = self.lote_actual()
-        if lote and self.politica(lote, self.demo.get())['incidencias']:
-            detalle = '\n\n'.join(f'{item["referencia"]}\n{item["mensaje"]}' for item in lote.incidencias)
-            self._ventana_texto(f'Incidencias · {lote.id}', f'{lote.errores} registros con error. Se conservan hasta 100 incidencias recientes.\n\n{detalle}')
-
-    def _actividad(self):
-        lote = self.lote_actual()
-        if lote:
-            self._ventana_texto(f'Actividad · {lote.id}', '\n\n'.join(f'{item["fecha"]}\n{item["mensaje"]}' for item in reversed(lote.actividad)))
-
-    def _resumen(self):
-        lote = self.lote_actual()
-        if not lote or not self.politica(lote, self.demo.get())['resumen']:
+        if not lote or lote.id != identificador:
             return
-        ruta = filedialog.asksaveasfilename(parent=self, title='Guardar resumen del lote', initialfile=f'{"EJEMPLO-" if self.demo.get() else ""}{lote.id}.json', defaultextension='.json', filetypes=[('Resumen JSON', '*.json')])
-        if not ruta:
-            return
-        try:
-            with open(ruta, 'w', encoding='utf-8') as archivo:
-                json.dump({'demostracion': self.demo.get(), 'lote': asdict(lote), 'procesados': lote.procesados, 'pendientes': lote.pendientes, 'progreso': lote.progreso}, archivo, ensure_ascii=False, indent=2)
-            messagebox.showinfo('Resumen guardado', 'Se guardó el reporte de seguimiento del lote.', parent=self)
-        except OSError as exc:
-            messagebox.showerror('No se pudo guardar', str(exc), parent=self)
+        ruta = filedialog.asksaveasfilename(parent=self, title='Guardar resumen del lote',
+            initialfile=lote.id+'.json', defaultextension='.json', filetypes=[('Resumen JSON','*.json')])
+        if ruta:
+            datos = dict(demostracion=False, lote=asdict(lote), procesados=lote.procesados, pendientes=lote.pendientes, progreso=lote.progreso)
+            try:
+                Path(ruta).write_text(json.dumps(datos, ensure_ascii=False, indent=2), encoding='utf-8')
+            except OSError as exc:
+                messagebox.showerror('No se pudo guardar', str(exc), parent=self)

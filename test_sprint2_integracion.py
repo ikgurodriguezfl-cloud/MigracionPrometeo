@@ -1,4 +1,5 @@
 """Prueba el enlace del proceso real al panel con conexiones sustituidas."""
+from contextlib import nullcontext
 from pathlib import Path
 from queue import Queue
 from threading import Event
@@ -9,6 +10,7 @@ import tkinter as tk
 
 from auth import AuthenticationService
 from gui_app import MigracionApp
+from marc_converter import MarcConverter
 from lotes import HistorialLotes
 import main as entrada
 
@@ -34,6 +36,7 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.lector.leer_fichas.return_value = [{'Ficha_No': 1}, {'Ficha_No': 2}, {'Ficha_No': 3}]
         self.lector.leer_ejemplares_por_ficha.return_value = {}
         self.escritor = Mock()
+        self.escritor.transaccion_ficha.side_effect = nullcontext
         self.escritor.registrar_existe.return_value = False
 
     def ejecutar(self):
@@ -69,6 +72,26 @@ class IntegracionSprint2Tests(unittest.TestCase):
                             for item in lote.incidencias))
         llamada = self.escritor.insertar_ejemplar.call_args
         self.assertIsNone(llamada.args[3])
+
+    def test_detalle_completo_de_fichas_aun_con_mas_de_100_incidencias(self):
+        self.lector.leer_fichas.return_value = [
+            {'Ficha_No': i, 'Titulo': f'Poesía {i}'} for i in (1, 2, 3)]
+        self.escritor.registrar_existe.side_effect = [False, True, False]
+        def convertir(ficha, ejemplares, **kwargs):
+            if ficha['Ficha_No'] == 3:
+                raise ValueError('registro inválido')
+            for i in range(105):
+                kwargs['incidencias'].append({'referencia': '952', 'mensaje': f'Aviso {i}'})
+            return Mock()
+        self.app.marc_converter.ficha_a_record.side_effect = convertir
+        self.ejecutar()
+        lote = HistorialLotes(self.historial.ruta).obtener(self.lote.id)
+        self.assertEqual(lote.estado, 'con_incidencias')
+        self.assertEqual([r['estado'] for r in lote.resultados], ['Convertida','Omitida','Rechazada'])
+        self.assertEqual(lote.resultados[0]['titulo'], 'Poesía 1')
+        self.assertEqual(len(lote.resultados[0]['motivos']), 105)
+        self.assertIn('registro inválido', lote.resultados[2]['motivos'][0])
+        self.assertEqual(len(lote.incidencias), 100)
 
     def test_fallo_de_conexion_conserva_pendientes_y_oculta_password(self):
         self.escritor.connect.side_effect = RuntimeError('Conexión fallida CLAVE_PRIVADA')
@@ -160,7 +183,11 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.app.entry_pass = Mock(); self.app.entry_pass.get.return_value = ''
         self.app._actualizar_panel = Mock()
         cursor = Mock()
-        cursor.fetchall.return_value = [{'marca_marcxml': '<collection><record></record></collection>'}] * 2
+        conversor = MarcConverter()
+        cursor.fetchall.return_value = [
+            {'id_ficha_acceso': i, 'marca_marcxml': conversor.record_a_marcxml(
+                conversor.ficha_a_record({'Ficha_No': i, 'Titulo': 'Prueba de edición'}, []))}
+            for i in (1, 3)]
         self.escritor.conn.cursor.return_value.__enter__ = Mock(return_value=cursor)
         self.escritor.conn.cursor.return_value.__exit__ = Mock(return_value=False)
         ruta = str(Path(self.temporal.name) / 'lote.xml')
@@ -190,31 +217,61 @@ class IntegracionSprint2Tests(unittest.TestCase):
 
 
 class InterfazSprint2Tests(unittest.TestCase):
-    def test_panel_integrado_y_botones_de_ejemplo(self):
+    def test_buscar_filtrar_y_paginar_fichas_con_incidencias(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            historial = HistorialLotes(Path(carpeta) / 'lotes.json')
+            lote = historial.recibir('respaldo.mdb', 51)
+            resultados = [
+                dict(id=i, referencia=f'Ficha {i}', titulo=f'Título {i}', estado='Convertida',
+                     motivos=['Ficha 51 · 008: fecha faltante'] if i == 51 else [])
+                for i in range(1, 52)
+            ]
+            historial.actualizar(lote.id, estado='con_incidencias', etapa='revision',
+                                 correctos=51, fichas_correctas=list(range(1, 52)),
+                                 resultados=resultados, incidencias=[
+                                     dict(referencia='Ficha 51 · 008', mensaje='fecha faltante')])
+            raiz = tk.Tk()
+            app = MigracionApp(raiz, historial)
+            try:
+                panel = app.panel_lotes
+                panel.vistas.select(1)
+                raiz.update()
+                texto = panel.textos['Fichas']
+                self.assertNotIn('Ficha 51', texto.get('1.0', 'end'))
+                panel._avanzar(1)
+                self.assertIn('Ficha 51 · Convertida con incidencias', texto.get('1.0', 'end'))
+                panel.tipo_ficha.set('Con incidencias')
+                self.assertEqual(panel.paginas['Fichas'].get(), '1 resultado · 1/1')
+                self.assertIn('fecha faltante', texto.get('1.0', 'end'))
+                panel.buscar_ficha.set('Título 10')
+                self.assertIn('Sin resultados', texto.get('1.0', 'end'))
+                panel.tipo_ficha.set('Todas')
+                self.assertIn('Ficha 10 · Convertida', texto.get('1.0', 'end'))
+            finally:
+                app.cerrar()
+
+    def test_ventana_compacta_con_acciones_visibles_y_lotes_reales(self):
         with tempfile.TemporaryDirectory() as carpeta:
             raiz = tk.Tk()
-            raiz.withdraw()
-            app = None
+            app = MigracionApp(raiz, HistorialLotes(Path(carpeta) / 'lotes.json'))
             try:
-                app = MigracionApp(raiz, HistorialLotes(Path(carpeta) / 'lotes.json'))
-                self.assertEqual(app.notebook.select(), str(app.panel_lotes))
                 panel = app.panel_lotes
-                panel.demo.set(True); panel._cambiar_modo()
-                self.assertEqual(len(panel.tabla.get_children()), 4)
-                for lote in panel.lotes:
-                    panel.seleccionado = lote.id; panel._pintar_detalle()
-                    self.assertIn('disabled', panel.btn_iniciar.state())
-                    self.assertIn('disabled', panel.btn_exportar.state())
-                    self.assertIn('disabled', panel.btn_detener.state())
-                    self.assertEqual('disabled' not in panel.btn_resumen.state(), lote.estado in ('concluido', 'con_incidencias'))
-                panel.filtro.set('En espera'); panel._pintar_tabla()
-                self.assertEqual(len(panel.tabla.get_children()), 1)
-                self.assertEqual(app.historial_lotes.listar(), [])
+                self.assertEqual(app.notebook.select(), str(panel))
+                self.assertFalse(panel.lotes)
+                for ancho, alto in ((683, 580), (480, 420)):
+                    raiz.geometry(f'{ancho}x{alto}')
+                    raiz.update()
+                    for boton in panel.botones.values():
+                        self.assertTrue(boton.winfo_ismapped())
+                        self.assertGreaterEqual(boton.winfo_rootx(), raiz.winfo_rootx())
+                        self.assertLessEqual(boton.winfo_rootx()+boton.winfo_width(),
+                                             raiz.winfo_rootx()+raiz.winfo_width())
+                        self.assertLessEqual(boton.winfo_rooty()+boton.winfo_height(),
+                                             raiz.winfo_rooty()+raiz.winfo_height())
+                panel.nuevo.invoke()
+                self.assertEqual(app.notebook.select(), str(app.frame_conexion))
             finally:
-                if app:
-                    app.cerrar()
-                else:
-                    raiz.destroy()
+                app.cerrar()
 
     def test_botones_detienen_el_lote_activo_y_se_reinician_para_otro_lote(self):
         with tempfile.TemporaryDirectory() as carpeta:
@@ -233,24 +290,22 @@ class InterfazSprint2Tests(unittest.TestCase):
                 lote = app.historial_lotes.obtener(app._lote_actual_id)
                 self.assertEqual(lote.version_mapeo, app.marc_converter.mapping_version)
                 self.assertRegex(lote.huella_mapeo, r'^[0-9a-f]{64}$')
-                self.assertNotIn('disabled', app.btn_detener.state())
                 self.assertNotIn('disabled', app.panel_lotes.btn_detener.state())
                 app.panel_lotes.btn_detener.invoke()
                 self.assertTrue(app._detencion_solicitada.is_set())
-                self.assertIn('disabled', app.btn_detener.state())
                 self.assertIn('disabled', app.panel_lotes.btn_detener.state())
-                self.assertEqual(app.btn_detener.cget('text'), 'Deteniendo…')
-                self.assertIn('Detención solicitada', app.panel_lotes.siguiente.cget('text'))
+                self.assertEqual(app.panel_lotes.btn_detener.cget('text'), 'Deteniendo…')
+                self.assertIn('Detención solicitada', app.panel_lotes.textos['Resumen'].get('1.0','end'))
                 app.historial_lotes.actualizar(app._lote_actual_id, estado='detenido', evento='Detenido en prueba.')
                 app._finalizar_migracion()
-                self.assertIn('disabled', app.btn_detener.state())
+                self.assertIn('disabled', app.panel_lotes.btn_detener.state())
                 self.assertIn('disabled', app.panel_lotes.btn_exportar.state())
                 self.assertNotIn('disabled', app.panel_lotes.btn_resumen.state())
                 with patch('gui_app.AccessReader', return_value=lector), patch('gui_app.threading.Thread'):
                     app._iniciar_migracion()
                 self.assertFalse(app._detencion_solicitada.is_set())
-                self.assertNotIn('disabled', app.btn_detener.state())
-                app.btn_detener.invoke()
+                self.assertNotIn('disabled', app.panel_lotes.btn_detener.state())
+                app.panel_lotes.btn_detener.invoke()
                 self.assertTrue(app._detencion_solicitada.is_set())
             finally:
                 if app:

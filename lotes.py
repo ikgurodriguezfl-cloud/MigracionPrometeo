@@ -53,6 +53,11 @@ class Lote:
     incidencias: list = field(default_factory=list)
     actividad: list = field(default_factory=list)
 
+    # None distingue los historiales anteriores, que sólo guardaban los ID correctos.
+    resultados: Optional[list] = None
+    usuario: Optional[str] = None
+    omitir_existentes: bool = True
+
     @property
     def procesados(self):
         return self.correctos + self.omitidos + self.errores
@@ -100,6 +105,24 @@ class Lote:
             raise ValueError('La versión y huella del mapeo deben ser válidas y registrarse juntas.')
         if not isinstance(self.fuente, str) or not self.fuente or not isinstance(self.id, str) or not self.id:
             raise ValueError('El lote necesita identificador y fuente.')
+        if self.resultados is not None:
+            if not isinstance(self.resultados, list) or len(self.resultados) != self.procesados:
+                raise ValueError('El detalle de fichas no coincide con el total procesado.')
+            conteos = {'Convertida': 0, 'Omitida': 0, 'Rechazada': 0}
+            convertidas = []
+            for fila in self.resultados:
+                if (not isinstance(fila, dict) or fila.get('estado') not in conteos
+                        or not isinstance(fila.get('referencia'), str)
+                        or not isinstance(fila.get('titulo'), str)
+                        or not isinstance(fila.get('motivos'), list)
+                        or not all(isinstance(m, str) for m in fila['motivos'])):
+                    raise ValueError('Detalle de ficha inválido.')
+                conteos[fila['estado']] += 1
+                if fila['estado'] == 'Convertida':
+                    convertidas.append(fila.get('id'))
+            if (list(conteos.values()) != [self.correctos, self.omitidos, self.errores]
+                    or convertidas != self.fichas_correctas):
+                raise ValueError('Los resultados por ficha no coinciden con sus conteos.')
         for campo in ('creado_en', 'actualizado_en'):
             if datetime.fromisoformat(getattr(self, campo)).tzinfo is None:
                 raise ValueError('Las fechas del lote requieren zona horaria.')
@@ -210,7 +233,7 @@ class HistorialLotes:
     def actualizar(self, identificador, **cambios):
         permitidos = {'estado', 'etapa', 'total_objetivo', 'destino', 'version_mapeo',
                       'huella_mapeo', 'correctos', 'omitidos', 'errores', 'ejemplares',
-                      'fichas_correctas', 'incidencias'}
+                      'fichas_correctas', 'incidencias', 'resultados', 'usuario', 'omitir_existentes'}
         mensaje = cambios.pop('evento', None)
         if set(cambios) - permitidos:
             raise ValueError('Se intentó cambiar un campo no permitido del lote.')
@@ -228,23 +251,3 @@ class HistorialLotes:
             self._guardar(lotes)
             self._lotes = lotes
             return copy.deepcopy(lote)
-
-
-def lotes_de_ejemplo():
-    """Escenarios aislados; nunca se guardan ni se ejecutan como migraciones."""
-    resultado = []
-    for indice, (estado, etapa, correctos, omitidos, errores) in enumerate((
-        ('en_espera', 'recepcion', 0, 0, 0),
-        ('en_proceso', 'conversion', 54, 6, 0),
-        ('concluido', 'finalizado', 90, 10, 0),
-        ('con_incidencias', 'revision', 80, 5, 10),
-    ), start=1):
-        lote = Lote(f'EJEMPLO-{indice:02}', f'Colección de ejemplo {indice}.mdb', 100, 100,
-                    estado=estado, etapa=etapa, correctos=correctos, omitidos=omitidos, errores=errores,
-                    fichas_correctas=list(range(1, correctos + 1)))
-        if errores:
-            lote.incidencias = [{'referencia': 'Ficha de ejemplo', 'mensaje': 'Falta información para convertir el registro. El detalle de este escenario es ilustrativo.'}]
-        lote.evento('Escenario de demostración; no representa una migración real.')
-        lote.validar()
-        resultado.append(lote)
-    return resultado

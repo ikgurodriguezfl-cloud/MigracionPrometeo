@@ -1,10 +1,13 @@
 """Escritura de registros MARC21 y ejemplares a MySQL."""
+from contextlib import contextmanager
+
 import pymysql
 from typing import Dict, Optional
 
 
 class MySQLWriter:
     def __init__(self, config: Dict):
+        self._en_ficha = False
         self.config = config
         self._conn = None
 
@@ -43,10 +46,13 @@ class MySQLWriter:
             charset=self.config.get('charset', 'utf8mb4'),
             autocommit=True,
         )
-        with tmp.cursor() as cur:
-            cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` "
-                        f"CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-        tmp.close()
+        try:
+            identificador = db_name.replace('`', '``')
+            with tmp.cursor() as cur:
+                cur.execute(f"CREATE DATABASE IF NOT EXISTS `{identificador}` "
+                            "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+        finally:
+            tmp.close()
 
     def test_connection(self) -> bool:
         try:
@@ -118,6 +124,20 @@ class MySQLWriter:
             cur.execute('SELECT id FROM registros_marc WHERE id_ficha_acceso = %s', (id_ficha,))
             return cur.fetchone() is not None
 
+    @contextmanager
+    def transaccion_ficha(self):
+        """La ficha y sus ejemplares se confirman o revierten juntos."""
+        self.conn.begin()
+        self._en_ficha = True
+        try:
+            yield
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            self._en_ficha = False
+
     def insertar_registro_marc(self, id_ficha: int, id_control: str,
                                marcxml: str, iso2709: bytes) -> int:
         with self.conn.cursor() as cur:
@@ -127,7 +147,8 @@ class MySQLWriter:
                 'VALUES (%s, %s, %s, %s, %s)',
                 (id_ficha, id_control, marcxml, iso2709, 'NUEVO'),
             )
-            self.conn.commit()
+            if not self._en_ficha:
+                self.conn.commit()
             return cur.lastrowid
 
     def insertar_ejemplar(self, id_registro_marc: int, id_ficha: int,
@@ -153,7 +174,8 @@ class MySQLWriter:
                     signatura,
                 ),
             )
-        self.conn.commit()
+        if not self._en_ficha:
+            self.conn.commit()
 
     def obtener_estadisticas(self) -> Dict:
         with self.conn.cursor() as cur:

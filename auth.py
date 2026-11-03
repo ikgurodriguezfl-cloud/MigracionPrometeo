@@ -118,6 +118,10 @@ class AuthenticationService:
         }
         return token
 
+    def nombre_usuario(self, token: str) -> str:
+        self.require_authenticated(token)
+        return self._active_sessions[token]['username']
+
     def is_authenticated(self, token: str) -> bool:
         return bool(token and token in self._active_sessions)
 

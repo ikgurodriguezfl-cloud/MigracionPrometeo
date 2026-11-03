@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from auth import AuthenticationService
+from identidad import aplicar_estilo, centrar, logo
 
 # Tokens de diseno alineados con el panel principal (panel_lotes.py).
 FONDO_PANEL = '#f5f6fa'
@@ -21,10 +22,9 @@ class LoginScreen:
         self.auth_service = auth_service
         self.on_login_success = on_login_success
 
-        self.root.title('Prometeo Migrator - Inicio de sesion')
-        self.root.geometry('480x520')
-        self.root.minsize(480, 520)
-        self.root.resizable(False, False)
+        self.root.title('Prometeo Migrator - Inicio de sesión')
+        self.familia = aplicar_estilo(root)
+        centrar(root, acceso=True)
         self.root.configure(background=FONDO_PANEL)
         self._crear_interfaz()
 
@@ -35,16 +35,17 @@ class LoginScreen:
 
         # Caja blanca que encierra todo el formulario.
         self.tarjeta = tk.Frame(contenedor, bg=BLANCO)
-        self.tarjeta.pack(expand=True, fill='both', padx=46, pady=46)
+        self.tarjeta.pack(expand=True, fill='both', padx=24, pady=18)
 
         # Contenido centrado dentro de la caja blanca, con respiro respecto a los bordes.
         interior = tk.Frame(self.tarjeta, bg=BLANCO)
-        interior.pack(expand=True, fill='both', padx=36, pady=34)
+        interior.pack(expand=True, fill='both', padx=26, pady=14)
 
+        logo(interior, 'solon-arguello.png').pack(pady=(0, 8))
         self.lbl_titulo = tk.Label(
             interior,
             text='Prometeo Migrator',
-            font=('Segoe UI', 21, 'bold'),
+            font=(self.familia, 21, 'bold'),
             fg=TEXTO_TITULO,
             bg=BLANCO,
         )
@@ -52,8 +53,8 @@ class LoginScreen:
 
         self.lbl_sub = tk.Label(
             interior,
-            text='Sistema de migracion a MARC21',
-            font=('Segoe UI', 10),
+            text='Migración bibliográfica · MARC21',
+            font=(self.familia, 10),
             fg=TEXTO_MUTED,
             bg=BLANCO,
         )
@@ -73,7 +74,7 @@ class LoginScreen:
         etiqueta = tk.Label(
             frame,
             text=texto,
-            font=('Segoe UI', 9),
+            font=(self.familia, 9),
             fg=TEXTO_CARD,
             bg=BLANCO,
             anchor='w',
@@ -82,7 +83,7 @@ class LoginScreen:
         entry = tk.Entry(
             frame,
             show=show,
-            font=('Segoe UI', 10),
+            font=(self.familia, 10),
             bg=BLANCO,
             fg=TEXTO_TITULO,
             insertbackground=TEXTO_TITULO,
@@ -111,17 +112,17 @@ class LoginScreen:
             relief='flat',
             padx=24,
             pady=8,
-            font=('Segoe UI', 10, 'bold'),
+            font=(self.familia, 10, 'bold'),
             cursor='hand2',
         )
         boton.pack(fill='x', pady=(16, 6))
 
     def _mostrar_login(self):
-        self.lbl_titulo.config(text='Iniciar sesion')
+        self.lbl_titulo.config(text='Iniciar sesión')
         self._limpiar_formulario()
         self.entry_usuario = self._crear_campo('Usuario:')
-        self.entry_contrasena = self._crear_campo('Contrasena:', show='*')
-        self._crear_boton_principal('Iniciar sesion', self._iniciar_sesion)
+        self.entry_contrasena = self._crear_campo('Contraseña:', show='*')
+        self._crear_boton_principal('Iniciar sesión', self._iniciar_sesion)
         self.entry_usuario.focus()
 
     def _iniciar_sesion(self):

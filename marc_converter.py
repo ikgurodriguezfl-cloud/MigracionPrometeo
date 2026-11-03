@@ -1,5 +1,6 @@
 """Construye registros MARC21 desde reglas declarativas versionadas."""
 from io import BytesIO
+from xml.etree import ElementTree as ET
 from copy import deepcopy
 from datetime import date, datetime
 from hashlib import sha256
@@ -224,7 +225,11 @@ class MarcConverter:
         campos = [' '] * descriptor['length']
         for posicion in descriptor['positions']:
             inicio = posicion['start']
-            if 'literal' in posicion:
+            if posicion.get('transform') == 'fecha_ingreso':
+                valor = datetime.now().strftime('%y%m%d')
+            elif 'setting' in posicion:
+                valor = self.settings[posicion['setting']]
+            elif 'literal' in posicion:
                 valor = posicion['literal']
             elif 'source' in posicion:
                 fuente = posicion['source']
@@ -264,6 +269,8 @@ class MarcConverter:
                 raise ValueError(f'Posición incompleta en la regla {regla}.')
             ancho = posicion.get('width', len(valor))
             campos[inicio:inicio + ancho] = list(valor.ljust(ancho)[:ancho])
+        if regla == '008' and not ''.join(campos[7:11]).isdigit():
+            campos[6:15] = list('nuuuuuuuu')
         return ''.join(campos)
 
     def _resolver_subcampo(self, descriptor, ficha, ejemplar, incidencias,
@@ -347,16 +354,18 @@ class MarcConverter:
             else:
                 self._agregar_regla(record, regla, ficha, None, incidencias,
                                     runtime_mappings)
+        if record.get('245') and not record.get('100'):
+            record['245'].indicator1 = '0'
         return record
 
     def record_a_marcxml(self, record: Record) -> str:
-        buffer = BytesIO()
-        writer = XMLWriter(buffer)
-        try:
+        with BytesIO() as buffer:
+            writer = XMLWriter(buffer)
             writer.write(record)
-            return buffer.getvalue().decode('utf-8')
-        finally:
-            writer.close()
+            writer.close(close_fh=False)
+            xml = buffer.getvalue().decode('utf-8')
+        ET.fromstring(xml)  # Rechaza, entre otros, caracteres de control ilegales.
+        return xml
 
     def record_a_iso2709(self, record: Record) -> bytes:
         return record.as_marc()
