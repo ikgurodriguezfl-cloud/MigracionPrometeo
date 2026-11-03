@@ -128,7 +128,7 @@ class AuthenticationService:
     def is_admin(self, token: str) -> bool:
         return bool(
             token
-            and self._active_sessions.get(token, {}).get('role') == 'admin'
+            and self._active_sessions.get(token, {}).get('role') in ('admin', 'Administracion')
         )
 
     def require_admin(self, token: str):
