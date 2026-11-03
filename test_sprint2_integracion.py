@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 import tkinter as tk
 
+from auth import AuthenticationService
 from gui_app import MigracionApp
 from lotes import HistorialLotes
 import main as entrada
@@ -55,6 +56,19 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.assertEqual(lote.estado, 'con_incidencias')
         self.assertEqual((lote.correctos, lote.errores, lote.progreso), (2, 1, 100))
         self.assertEqual(lote.incidencias[0]['referencia'], 'Ficha 2')
+
+    def test_sucursal_sin_correspondencia_no_se_copia_como_destino(self):
+        self.lector.leer_ejemplares_por_ficha.return_value = {
+            1: [{'Biblioteca': 165}],
+        }
+
+        lote = self.ejecutar()
+
+        self.assertEqual(lote.estado, 'con_incidencias')
+        self.assertTrue(any('No contemplado' in item['mensaje']
+                            for item in lote.incidencias))
+        llamada = self.escritor.insertar_ejemplar.call_args
+        self.assertIsNone(llamada.args[3])
 
     def test_fallo_de_conexion_conserva_pendientes_y_oculta_password(self):
         self.escritor.connect.side_effect = RuntimeError('Conexión fallida CLAVE_PRIVADA')
@@ -137,6 +151,7 @@ class IntegracionSprint2Tests(unittest.TestCase):
 
     def test_exportacion_consulta_solo_las_fichas_correctas_del_lote(self):
         from xml.etree import ElementTree
+        self.app.perfil_usuario = 'Aprobacion'
         self.historial.actualizar(self.lote.id, estado='concluido', etapa='finalizado',
             correctos=2, omitidos=1, fichas_correctas=[1, 3])
         self.app._politica_lote = Mock(return_value={'exportar': True})
@@ -156,6 +171,22 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.assertIn('WHERE id_ficha_acceso IN (%s,%s)', consulta)
         self.assertEqual(parametros, (1, 3))
         self.assertEqual(len(ElementTree.parse(ruta).getroot()), 2)
+
+    def test_perfiles_sin_permiso_no_llegan_al_motor_ni_al_exportador(self):
+        for perfil, operacion in (
+            ('Revision', self.app._probar_access),
+            ('Aprobacion', self.app._iniciar_migracion),
+            ('Ejecucion', self.app._exportar_marcxml),
+        ):
+            with self.subTest(perfil=perfil, operacion=operacion.__name__), \
+                    patch('gui_app.messagebox.showerror') as aviso, \
+                    patch('gui_app.AccessReader') as origen, \
+                    patch('gui_app.MySQLWriter') as destino:
+                self.app.perfil_usuario = perfil
+                operacion()
+                self.assertEqual(aviso.call_args.args[0], 'Acceso Restringido')
+                origen.assert_not_called()
+                destino.assert_not_called()
 
 
 class InterfazSprint2Tests(unittest.TestCase):
@@ -199,6 +230,9 @@ class InterfazSprint2Tests(unittest.TestCase):
                 with patch('gui_app.AccessReader', return_value=lector), patch('gui_app.threading.Thread'):
                     app._iniciar_migracion()
                 self.assertFalse(app._detencion_solicitada.is_set())
+                lote = app.historial_lotes.obtener(app._lote_actual_id)
+                self.assertEqual(lote.version_mapeo, app.marc_converter.mapping_version)
+                self.assertRegex(lote.huella_mapeo, r'^[0-9a-f]{64}$')
                 self.assertNotIn('disabled', app.btn_detener.state())
                 self.assertNotIn('disabled', app.panel_lotes.btn_detener.state())
                 app.panel_lotes.btn_detener.invoke()
@@ -228,18 +262,24 @@ class InterfazSprint2Tests(unittest.TestCase):
     def test_main_abre_el_sistema_y_retira_el_atajo_del_login(self):
         with tempfile.TemporaryDirectory() as carpeta:
             aplicaciones = []
-            def login_simulado(raiz, on_login_success):
+            servicio = AuthenticationService(Path(carpeta) / 'auth.db')
+            servicio.create_user('operador', 'clave-prueba', 'Ejecucion')
+            def login_simulado(raiz, auth_service, on_login_success):
                 raiz.withdraw()
                 raiz.bind('<Return>', lambda evento: None)
-                on_login_success()
-            def crear_app(raiz):
-                app = MigracionApp(raiz, HistorialLotes(Path(carpeta) / 'lotes.json'))
+                on_login_success(auth_service.authenticate('operador', 'clave-prueba'))
+            def crear_app(raiz, **opciones):
+                app = MigracionApp(raiz, HistorialLotes(Path(carpeta) / 'lotes.json'), **opciones)
                 aplicaciones.append(app)
+                self.assertEqual(app.perfil_usuario, 'Ejecucion')
+                self.assertTrue(servicio.is_authenticated(app.session_token))
                 self.assertEqual(raiz.bind('<Return>'), '')
                 self.assertTrue(all(raiz.resizable()))
                 raiz.after(50, app.cerrar)
                 return app
-            with patch.object(entrada, 'LoginScreen', side_effect=login_simulado), patch.object(entrada, 'MigracionApp', side_effect=crear_app):
+            with patch.object(entrada, 'AuthenticationService', return_value=servicio), \
+                    patch.object(entrada, 'LoginScreen', side_effect=login_simulado), \
+                    patch.object(entrada, 'MigracionApp', side_effect=crear_app):
                 entrada.main()
             self.assertEqual(len(aplicaciones), 1)
 

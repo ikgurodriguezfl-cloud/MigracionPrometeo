@@ -196,7 +196,9 @@ class PanelLotes(ttk.Frame):
             self.conteos.config(text=(f'Recibidos: {lote.total_recibidos:,}  ·  En esta ejecución: {lote.total_objetivo:,}\n'
                 f'Procesados: {lote.procesados:,} ({lote.progreso:g} %)  ·  Pendientes: {lote.pendientes:,}\n'
                 f'Correctos: {lote.correctos:,}  ·  Omitidos: {lote.omitidos:,}  ·  Errores: {lote.errores:,}\n'
-                f'Ejemplares guardados: {lote.ejemplares:,}'))
+                f'Ejemplares guardados: {lote.ejemplares:,}\n'
+                f'Mapeo MARC21: {lote.version_mapeo or "no registrado"}'
+                f'{(" · SHA-256 " + lote.huella_mapeo) if lote.huella_mapeo else ""}'))
             pasos = {
                 'en_espera': 'Siguiente paso: confirma conexiones y opciones, y ejecuta la migración. Si cambiaste el archivo, valida Access otra vez.',
                 'en_proceso': 'Procesamiento en curso. La exportación se habilita al concluir sin errores.',
