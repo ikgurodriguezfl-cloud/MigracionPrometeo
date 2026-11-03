@@ -554,7 +554,7 @@ class MigracionApp:
             detalle_tamano = 'no disponible'
 
         self.lbl_info_access.config(
-            text=f'Archivo: {nombre} | Tamaño: {detalle_tamano}'
+            text=f'Archivo: {nombre} | Tamaño: {detalle_tamano}\nEl archivo se usa en modo solo lectura.'
         )
 
     def _validar_archivo_access(self, path: str) -> List[str]:
