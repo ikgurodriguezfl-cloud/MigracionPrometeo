@@ -82,16 +82,17 @@ class MigracionApp:
         barra = ttk.Frame(self.root, style='Marca.TFrame', padding=(8, 3))
         barra.pack(fill='x')
         logo(barra, 'nayarit-cecan.png').pack(side='left')
-        cuenta = ttk.Menubutton(barra, text='Cuenta')
-        menu = tk.Menu(cuenta, tearoff=False)
+        self.cuenta = ttk.Menubutton(barra, text='Cuenta')
+        menu = tk.Menu(self.cuenta, tearoff=False)
         if self.perfil_usuario == 'Administracion':
             menu.add_command(label='Crear usuario', command=self._abrir_registro_usuario)
         menu.add_command(label='Cerrar sesión', command=self._cerrar_sesion)
-        cuenta.configure(menu=menu)
-        cuenta.pack(side='right')
+        self.cuenta.configure(menu=menu)
+        self.cuenta.pack(side='right')
         self.estado_mysql = tk.StringVar(value='MySQL · sin probar')
         self.abrir_ajustes = ttk.Button(barra, text='Ajustes', command=lambda: self.notebook.select(self.ajustes))
         self.abrir_ajustes.pack(side='right', padx=3)
+        ttk.Button(barra, text='Ayuda', command=self._iniciar_tutorial).pack(side='right', padx=3)
         ttk.Label(self.root, textvariable=self.estado_mysql, anchor='e').pack(fill='x', padx=10)
 
         ttk.Style(self.root).layout('Espacio.TNotebook.Tab', [])
@@ -110,17 +111,17 @@ class MigracionApp:
             ttk.Label(cabecera, text=titulo, style='Titulo.TLabel').pack(side='left')
             ttk.Button(cabecera, text='Volver a lotes', command=lambda: self.notebook.select(self.panel_lotes)).pack(side='right')
 
-        ajustes = ttk.Notebook(self.ajustes)
-        ajustes.pack(fill='both', expand=True)
-        destino = ttk.Frame(ajustes)
-        self.frame_config = ttk.Frame(ajustes)
-        self.frame_log = ttk.Frame(ajustes)
+        self.notebook_ajustes = ttk.Notebook(self.ajustes)
+        self.notebook_ajustes.pack(fill='both', expand=True)
+        self.destino = ttk.Frame(self.notebook_ajustes)
+        self.frame_config = ttk.Frame(self.notebook_ajustes)
+        self.frame_log = ttk.Frame(self.notebook_ajustes)
         if self.perfil_usuario == 'Administracion':
-            ajustes.add(destino, text='Destino MySQL')
-            ajustes.add(self.frame_config, text='Mapeo MARC21')
-        ajustes.add(self.frame_log, text='Bitácora')
+            self.notebook_ajustes.add(self.destino, text='Destino MySQL')
+            self.notebook_ajustes.add(self.frame_config, text='Mapeo MARC21')
+        self.notebook_ajustes.add(self.frame_log, text='Bitácora')
         self._crear_preparacion()
-        self._crear_destino(destino)
+        self._crear_destino(self.destino)
         self._crear_pestana_config()
         self._crear_pestana_log()
         for var in (self.entry_host, self.entry_port, self.entry_db, self.entry_user, self.entry_pass):
@@ -461,6 +462,230 @@ class MigracionApp:
             self.on_logout()
         else:
             self.cerrar()
+
+    def _iniciar_tutorial(self):
+        """Inicia un tutorial guiado e interactivo paso a paso por la aplicación."""
+        es_admin = self.auth_service is not None and self.auth_service.is_admin(self.session_token)
+
+        # Referencias a los botones objetivo de cada paso (para resaltarlos).
+        btn_nuevo_lote = getattr(self.panel_lotes, 'nuevo', None)
+        btn_ejecutar = getattr(self.panel_lotes, 'btn_iniciar', None)
+        btn_exportar = getattr(self.panel_lotes, 'btn_exportar', None)
+        btn_cuenta = getattr(self, 'cuenta', None)
+
+        def navegar(marco_principal=None, sub_pestana=None):
+            if marco_principal is not None:
+                self.notebook.select(marco_principal)
+                self.root.update_idletasks()
+            if sub_pestana is not None:
+                self.notebook_ajustes.select(sub_pestana)
+                self.root.update_idletasks()
+
+        def resaltar_objetivo(widget, color='#c00000'):
+            """Dibuja un borde rojo punteado alrededor del widget sin tapar el contenido."""
+            if widget is None:
+                return None
+            try:
+                widget.update_idletasks()
+                x = widget.winfo_x()
+                y = widget.winfo_y()
+                w = widget.winfo_width()
+                h = widget.winfo_height()
+                if w <= 1 or h <= 1:
+                    return None
+                parent = widget.master
+                canvas = tk.Canvas(parent, width=w, height=h, highlightthickness=0,
+                                   bg=parent.cget('background'))
+                canvas.place(x=x, y=y)
+                canvas.create_rectangle(2, 2, w - 3, h - 3, outline=color, width=3, dash=(6, 4))
+                widget.lift()  # El widget queda encima del canvas para seguir siendo clickeable
+                return canvas
+            except tk.TclError:
+                return None
+
+        def quitar_resaltado(overlay):
+            """Elimina el borde de resaltado."""
+            if overlay is not None:
+                try:
+                    overlay.destroy()
+                except tk.TclError:
+                    pass
+
+        pasos = [
+            {
+                'titulo': 'Modo tutorial',
+                'mensaje': ('Se ha iniciado el modo tutorial de Prometeo Migrator.\n\n'
+                            'Pulsa OK para comenzar con el primer paso.'),
+                'pestana': None,
+                'sub_pestana': None,
+                'objetivo': None,
+                'objetivo_nombre': None,
+            },
+            {
+                'titulo': 'Paso 1 - Nuevo lote',
+                'mensaje': ('Paso 1: Haz clic en el botón "Nuevo lote" resaltado abajo.\n\n'
+                            'Este botón te lleva a la pantalla para preparar un nuevo lote de migración.\n\n'
+                            'Una vez que hagas clic en el botón resaltado, continuarán los siguientes pasos.'),
+                'pestana': self.panel_lotes,
+                'sub_pestana': None,
+                'objetivo': btn_nuevo_lote,
+                'objetivo_nombre': 'botón Nuevo lote',
+            },
+            {
+                'titulo': 'Paso 2 - Base de datos MySQL',
+                'mensaje': ('Paso 2: Haz clic en la pestaña "Destino MySQL" resaltada abajo.\n\n'
+                            'Aquí eliges la base de datos MySQL de destino.\n\n'
+                            'Debes tener MySQL instalado y funcionando para que la migración '
+                            'pueda escribir los registros MARC21 convertidos.'),
+                'pestana': self.ajustes,
+                'sub_pestana': self.destino,
+                'objetivo': self.notebook_ajustes,
+                'objetivo_nombre': 'pestaña Destino MySQL',
+            },
+            {
+                'titulo': 'Paso 3 - Configuración avanzada',
+                'mensaje': ('Paso 3: Haz clic en la pestaña "Mapeo MARC21" resaltada abajo.\n\n'
+                            'Aquí configuras los mapeos de bibliotecas, estados de ejemplar '
+                            'y los valores por defecto para Koha (campos 942 y 952).'),
+                'pestana': self.ajustes,
+                'sub_pestana': self.frame_config,
+                'objetivo': self.notebook_ajustes,
+                'objetivo_nombre': 'pestaña Mapeo MARC21',
+            },
+            {
+                'titulo': 'Paso 4 - Log',
+                'mensaje': ('Paso 4: Haz clic en la pestaña "Bitácora" resaltada abajo.\n\n'
+                            'El log muestra los eventos y mensajes de la migración en tiempo real.'),
+                'pestana': self.ajustes,
+                'sub_pestana': self.frame_log,
+                'objetivo': self.notebook_ajustes,
+                'objetivo_nombre': 'pestaña Bitácora',
+            },
+            {
+                'titulo': 'Paso 5 - Configurar el lote',
+                'mensaje': ('Paso 5: Configura el lote en la pantalla de Lotes.\n\n'
+                            'Selecciona tu archivo de respaldo Access, valida la conexión y el sistema '
+                            'registrará el lote para su procesamiento.\n\n'
+                            'Cuando hayas revisado la pantalla, pulsa OK para continuar.'),
+                'pestana': self.panel_lotes,
+                'sub_pestana': None,
+                'objetivo': None,
+                'objetivo_nombre': None,
+            },
+            {
+                'titulo': 'Paso 6 - Botón Ejecutar migración',
+                'mensaje': ('Paso 6: Haz clic en el botón "Ejecutar migración" resaltado abajo.\n\n'
+                            'Este botón inicia el procesamiento del lote seleccionado.\n\n'
+                            'Una vez que hagas clic en el botón resaltado, continuarán los siguientes pasos.'),
+                'pestana': None,
+                'sub_pestana': None,
+                'objetivo': btn_ejecutar,
+                'objetivo_nombre': 'botón Ejecutar migración',
+            },
+            {
+                'titulo': 'Paso 7 - Botón Exportar MARCXML',
+                'mensaje': ('Paso 7: Haz clic en el botón "Exportar MARCXML del lote" resaltado abajo.\n\n'
+                            'Este botón genera un archivo MARCXML con los registros '
+                            'correctos una vez el lote concluya sin errores.\n\n'
+                            'Una vez que hagas clic en el botón resaltado, continuarán los siguientes pasos.'),
+                'pestana': None,
+                'sub_pestana': None,
+                'objetivo': btn_exportar,
+                'objetivo_nombre': 'botón Exportar MARCXML del lote',
+            },
+        ]
+
+        if es_admin and btn_cuenta is not None:
+            pasos.append({
+                'titulo': 'Paso 8 - Crear usuario (Administrador)',
+                'mensaje': ('Último paso: Haz clic en el menú "Cuenta" resaltado de la barra superior.\n\n'
+                            'Como administrador, puedes crear nuevos usuarios.\n\n'
+                            'Funciones de cada rol:\n'
+                            '• Ejecucion: valida Access e inicia conversiones.\n'
+                            '• Revision: revisa muestras de los registros.\n'
+                            '• Aprobacion: aprueba exportaciones a MARCXML.\n'
+                            '• Administracion: acceso completo, incluida creación de usuarios y configuración.\n\n'
+                            'Una vez que hagas clic en el menú resaltado, finalizará el tutorial.'),
+                'pestana': None,
+                'sub_pestana': None,
+                'objetivo': btn_cuenta,
+                'objetivo_nombre': 'menú Cuenta',
+            })
+
+        for paso in pasos:
+            navegar(paso['pestana'], paso['sub_pestana'])
+
+            if paso['objetivo'] is not None:
+                # Resaltar el objetivo con borde rojo punteado (sin tapar contenido)
+                overlay = resaltar_objetivo(paso['objetivo'])
+                # Mostrar popup no modal (solo informa, no bloquea)
+                dlg = self._mostrar_dialogo_tutorial_no_modal(paso['titulo'], paso['mensaje'])
+
+                clic_var = tk.BooleanVar(value=False)
+
+                def al_clic(evento, cv=clic_var, overlay=overlay, dlg=dlg,
+                            obj=paso['objetivo']):
+                    if not cv.get():
+                        cv.set(True)
+                        quitar_resaltado(overlay)
+                        try:
+                            dlg.destroy()
+                        except tk.TclError:
+                            pass
+                        try:
+                            obj.unbind('<Button-1>')
+                        except tk.TclError:
+                            pass
+
+                paso['objetivo'].bind('<Button-1>', al_clic, add='+')
+
+                # Esperar a que el usuario haga clic en el objetivo (sin bloquear la interfaz)
+                self.root.wait_variable(clic_var)
+            else:
+                self._mostrar_dialogo_tutorial(paso['titulo'], paso['mensaje'])
+
+        self._mostrar_dialogo_tutorial(
+            'Tutorial completado',
+            'Has finalizado el modo tutorial. Ya puedes usar el sistema.',
+        )
+
+    def _mostrar_dialogo_tutorial_no_modal(self, titulo, mensaje):
+        """Muestra un cuadro de diálogo NO modal que solo informa qué hacer."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title(titulo)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        # Sin grab_set, sin wait_window: no bloquea la interfaz principal
+
+        marco = ttk.Frame(dlg, padding=20)
+        marco.pack(fill='both', expand=True)
+
+        ttk.Label(marco, text=mensaje, wraplength=420, justify='left').pack(
+            fill='x', pady=(0, 16)
+        )
+
+        ttk.Button(marco, text='Entendido', command=dlg.destroy).pack()
+
+        return dlg
+
+    def _mostrar_dialogo_tutorial(self, titulo, mensaje):
+        """Muestra un cuadro de diálogo modal sin sonido del sistema (solo para pasos sin objetivo)."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title(titulo)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        marco = ttk.Frame(dlg, padding=20)
+        marco.pack(fill='both', expand=True)
+
+        ttk.Label(marco, text=mensaje, wraplength=400, justify='left').pack(
+            fill='x', pady=(0, 16)
+        )
+
+        ttk.Button(marco, text='OK', command=dlg.destroy).pack()
+
+        dlg.wait_window()
 
     def _abrir_registro_usuario(self):
         try:
