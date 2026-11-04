@@ -29,57 +29,56 @@ class PanelLotes(ttk.Frame):
 
     def _estilos(self):
         estilo = ttk.Style(self)
-        estilo.configure('Panel.TFrame', background='#f5f6fa')
+        estilo.configure('Panel.TFrame', background='#f7f5f2')
         estilo.configure('Tarjeta.TFrame', background='#ffffff')
-        estilo.configure('Panel.TLabel', background='#f5f6fa', foreground='#777d91', font=('Segoe UI', 9))
-        estilo.configure('Titulo.Panel.TLabel', background='#f5f6fa', foreground='#29283e', font=('Segoe UI', 21, 'bold'))
-        estilo.configure('Tarjeta.TLabel', background='#ffffff', foreground='#6f7589', font=('Segoe UI', 9))
-        estilo.configure('Nombre.TLabel', background='#ffffff', foreground='#35324d', font=('Segoe UI', 14, 'bold'))
-        estilo.configure('Numero.TLabel', background='#ffffff', foreground='#7055c5', font=('Segoe UI', 20, 'bold'))
-        estilo.configure('Lotes.Treeview', rowheight=32, font=('Segoe UI', 9))
-        estilo.configure('Lotes.Treeview.Heading', font=('Segoe UI', 9, 'bold'))
-        estilo.configure('Lotes.Horizontal.TProgressbar', background='#8065ca', troughcolor='#ece8f6')
+        estilo.configure('Panel.TLabel', background='#f7f5f2', foreground='#777078', font=('Segoe UI', 9))
+        estilo.configure('Titulo.Panel.TLabel', background='#f7f5f2', foreground='#302a31', font=('Segoe UI', 19, 'bold'))
+        estilo.configure('Tarjeta.TLabel', background='#ffffff', foreground='#686168', font=('Segoe UI', 9))
+        estilo.configure('Nombre.TLabel', background='#ffffff', foreground='#302a31', font=('Segoe UI', 14, 'bold'))
+        estilo.configure('Numero.TLabel', background='#ffffff', foreground='#6d0c2e', font=('Segoe UI', 20, 'bold'))
+        estilo.configure('Lotes.Treeview', rowheight=36, font=('Segoe UI', 9),
+                         background='#ffffff', fieldbackground='#ffffff', foreground='#302a31')
+        estilo.configure('Lotes.Treeview.Heading', font=('Segoe UI', 9, 'bold'),
+                         background='#f7f5f2', foreground='#686168', padding=(8, 9))
+        estilo.map('Lotes.Treeview', background=[('selected', '#f3e8ec')],
+                   foreground=[('selected', '#6d0c2e')])
+        estilo.configure('Lotes.Horizontal.TProgressbar', background='#6d0c2e', troughcolor='#e8e2de',
+                         thickness=8)
+        estilo.configure('Estado.TLabel', background='#ffffff', foreground='#6d0c2e',
+                         font=('Segoe UI', 9, 'bold'))
 
     def _crear(self):
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(3, weight=1)
+        self.rowconfigure(2, weight=1)
         cabecera = ttk.Frame(self, style='Panel.TFrame')
-        cabecera.grid(row=0, column=0, sticky='ew', pady=(0, 12))
-        ttk.Label(cabecera, text='Panel de lotes', style='Titulo.Panel.TLabel').pack(side='left')
-        ttk.Button(cabecera, text='Configurar conexiones', command=self.conexiones).pack(side='right', padx=(8, 0))
-        ttk.Checkbutton(cabecera, text='Ver estados de ejemplo', variable=self.demo, command=self._cambiar_modo).pack(side='right')
-        self.aviso = ttk.Label(self, text='Consulta los lotes reales de esta aplicación.', style='Panel.TLabel')
+        cabecera.grid(row=0, column=0, sticky='ew', pady=(0, 4))
+        ttk.Label(cabecera, text='Lotes recientes', style='Titulo.Panel.TLabel').pack(side='left')
+        ttk.Button(
+            cabecera, text='Nueva migración', style='Primary.TButton',
+            command=self.conexiones,
+        ).pack(side='right')
+        self.aviso = ttk.Label(
+            self, text='Selecciona un lote para ver su estado y las acciones disponibles.',
+            style='Panel.TLabel',
+        )
         self.aviso.grid(row=1, column=0, sticky='ew', pady=(0, 12))
 
-        metricas = ttk.Frame(self, style='Panel.TFrame')
-        metricas.grid(row=2, column=0, sticky='ew', pady=(0, 12))
-        self.metricas = {}
-        for columna, (clave, etiqueta) in enumerate((('todos', 'Lotes registrados'), ('en_proceso', 'En proceso'), ('concluido', 'Concluidos'), ('con_incidencias', 'Con incidencias'))):
-            metricas.columnconfigure(columna, weight=1, uniform='metricas')
-            tarjeta = ttk.Frame(metricas, padding=10, style='Tarjeta.TFrame')
-            tarjeta.grid(row=0, column=columna, sticky='ew', padx=(0, 8 if columna < 3 else 0))
-            ttk.Label(tarjeta, text=etiqueta, style='Tarjeta.TLabel').pack(anchor='w')
-            valor = ttk.Label(tarjeta, text='0', style='Numero.TLabel')
-            valor.pack(anchor='w')
-            self.metricas[clave] = valor
-
         cuerpo = ttk.Panedwindow(self, orient='horizontal')
-        cuerpo.grid(row=3, column=0, sticky='nsew')
-        listado = ttk.Frame(cuerpo, padding=8, style='Tarjeta.TFrame')
-        detalle = ttk.Frame(cuerpo, padding=16, style='Tarjeta.TFrame')
+        cuerpo.grid(row=2, column=0, sticky='nsew')
+        listado = ttk.Frame(cuerpo, padding=12, style='Tarjeta.TFrame')
+        detalle = ttk.Frame(cuerpo, padding=18, style='Tarjeta.TFrame')
         cuerpo.add(listado, weight=3)
         cuerpo.add(detalle, weight=2)
         listado.columnconfigure(0, weight=1)
         listado.rowconfigure(1, weight=1)
         filtros = ttk.Frame(listado, style='Tarjeta.TFrame')
         filtros.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 8))
-        ttk.Label(filtros, text='Lotes de migración', style='Tarjeta.TLabel').pack(anchor='w', pady=(0, 6))
-        combo = ttk.Combobox(filtros, textvariable=self.filtro, values=['Todos'] + list(ESTADOS.values()), state='readonly', width=17)
-        combo.pack(side='left', padx=(0, 8))
+        ttk.Label(filtros, text='Historial', style='Tarjeta.TLabel').pack(side='left', padx=(0, 10))
+        combo = ttk.Combobox(filtros, textvariable=self.filtro, values=['Todos'] + list(ESTADOS.values()), state='readonly', width=16)
+        combo.pack(side='left', padx=(0, 10))
         combo.bind('<<ComboboxSelected>>', lambda _: self._pintar_tabla())
         entrada = ttk.Entry(filtros, textvariable=self.consulta)
         entrada.pack(side='left', fill='x', expand=True)
-        ttk.Label(filtros, text='Filtrar', style='Tarjeta.TLabel').pack(side='left', padx=(5, 0))
         self.consulta.trace_add('write', lambda *_: self._pintar_tabla())
         self.tabla = ttk.Treeview(listado, columns=('lote', 'estado', 'avance', 'total'), show='headings', selectmode='browse', style='Lotes.Treeview')
         for columna, titulo, ancho in (('lote', 'Lote / origen', 240), ('estado', 'Estado', 130), ('avance', 'Avance', 70), ('total', 'Recibidos', 75)):
@@ -102,7 +101,7 @@ class PanelLotes(ttk.Frame):
         self.identificador.grid(row=0, column=0, sticky='w')
         self.nombre = ttk.Label(detalle, style='Nombre.TLabel', wraplength=340)
         self.nombre.grid(row=1, column=0, sticky='ew', pady=(4, 8))
-        self.estado = ttk.Label(detalle, style='Tarjeta.TLabel')
+        self.estado = ttk.Label(detalle, style='Estado.TLabel')
         self.estado.grid(row=2, column=0, sticky='ew')
         self.etapa = ttk.Label(detalle, style='Tarjeta.TLabel')
         self.etapa.grid(row=3, column=0, sticky='ew', pady=(4, 8))
@@ -130,7 +129,10 @@ class PanelLotes(ttk.Frame):
         self.btn_resumen.pack(side='left', fill='x', expand=True)
         self.actualizado = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=350)
         self.actualizado.grid(row=8, column=0, sticky='ew', pady=(12, 0))
-        ttk.Button(self, text='Ver actividad del lote', command=self._actividad).grid(row=4, column=0, sticky='e', pady=(10, 0))
+        ttk.Button(
+            self, text='Ver actividad del lote', style='Quiet.TButton',
+            command=self._actividad,
+        ).grid(row=3, column=0, sticky='e', pady=(8, 0))
 
     def _cambiar_modo(self):
         self.seleccionado = None
@@ -139,8 +141,6 @@ class PanelLotes(ttk.Frame):
     def actualizar(self, seleccionar=None):
         self.lotes = lotes_de_ejemplo() if self.demo.get() else self.listar()
         self.aviso.config(text='DEMOSTRACIÓN: datos de ejemplo. No se ejecutan ni exportan migraciones reales.' if self.demo.get() else 'Historial de la aplicación. El avance se actualiza durante la migración.')
-        for clave, widget in self.metricas.items():
-            widget.config(text=str(len(self.lotes) if clave == 'todos' else sum(lote.estado == clave for lote in self.lotes)))
         if seleccionar and not self.demo.get():
             self.seleccionado = seleccionar
         if not any(lote.id == self.seleccionado for lote in self.lotes):
@@ -168,7 +168,11 @@ class PanelLotes(ttk.Frame):
             visibles.append(lote.id)
         if self.seleccionado in visibles:
             self.tabla.selection_set(self.seleccionado)
-        self.sin_lotes.config(text='Sin lotes todavía. En Conexiones selecciona Access y pulsa Probar conexión para registrar un lote.' if not self.lotes else f'{len(visibles)} de {len(self.lotes)} lotes visibles. Selecciona una fila para consultar su detalle.')
+        self.sin_lotes.config(
+            text=('Aún no hay lotes. Ve a «1 Conexión» para validar tu archivo Access.'
+                  if not self.lotes else
+                  f'{len(visibles)} de {len(self.lotes)} lotes visibles. Selecciona uno para ver el detalle.')
+        )
 
     def _seleccionar(self, _evento=None):
         seleccion = self.tabla.selection()
@@ -190,21 +194,32 @@ class PanelLotes(ttk.Frame):
         else:
             self.identificador.config(text=lote.id)
             self.nombre.config(text=os.path.basename(lote.fuente))
-            self.estado.config(text='Estado: ' + ESTADOS[lote.estado])
+            colores_estado = {
+                'en_espera': '#777078',
+                'en_proceso': '#6d0c2e',
+                'concluido': '#367963',
+                'con_incidencias': '#a36d23',
+                'detenido': '#956c42',
+            }
+            self.estado.config(
+                text=ESTADOS[lote.estado],
+                foreground=colores_estado[lote.estado],
+            )
             self.etapa.config(text='Etapa: ' + ETAPAS[lote.etapa])
             self.barra['value'] = lote.progreso
-            self.conteos.config(text=(f'Recibidos: {lote.total_recibidos:,}  ·  En esta ejecución: {lote.total_objetivo:,}\n'
-                f'Procesados: {lote.procesados:,} ({lote.progreso:g} %)  ·  Pendientes: {lote.pendientes:,}\n'
-                f'Correctos: {lote.correctos:,}  ·  Omitidos: {lote.omitidos:,}  ·  Errores: {lote.errores:,}\n'
-                f'Ejemplares guardados: {lote.ejemplares:,}\n'
-                f'Mapeo MARC21: {lote.version_mapeo or "no registrado"}'
-                f'{(" · SHA-256 " + lote.huella_mapeo) if lote.huella_mapeo else ""}'))
+            self.conteos.config(text=(
+                f'{lote.procesados:,} de {lote.total_objetivo:,} fichas · {lote.progreso:g} %\n'
+                f'{lote.correctos:,} correctas  ·  {lote.omitidos:,} omitidas  ·  {lote.errores:,} errores\n'
+                f'{lote.pendientes:,} pendientes  ·  {lote.ejemplares:,} ejemplares\n'
+                f'Mapeo MARC21 {lote.version_mapeo or "no registrado"}'
+                f'{(" · SHA-256 " + lote.huella_mapeo) if lote.huella_mapeo else ""}'
+            ))
             pasos = {
-                'en_espera': 'Siguiente paso: confirma conexiones y opciones, y ejecuta la migración. Si cambiaste el archivo, valida Access otra vez.',
-                'en_proceso': 'Procesamiento en curso. La exportación se habilita al concluir sin errores.',
-                'concluido': 'Procesamiento finalizado. Revisa el resumen antes de exportar los nuevos registros correctos del lote. Esto no importa a Koha.',
-                'con_incidencias': 'Revisa las incidencias y los registros pendientes. La exportación permanece bloqueada para evitar continuar antes de resolverlas.',
-                'detenido': 'Detenido por el usuario. Se conservaron los avances y quedan registros pendientes. Puedes guardar el resumen; este lote no se reanuda automáticamente.',
+                'en_espera': 'Valida las conexiones y ejecuta este lote.',
+                'en_proceso': 'Migración en curso. El avance se actualiza automáticamente.',
+                'concluido': 'Listo para revisar o exportar. No se ha importado a Koha.',
+                'con_incidencias': 'Revisa las incidencias antes de continuar.',
+                'detenido': 'Avance conservado. Este lote no se reanuda automáticamente.',
             }
             self.siguiente.config(text=pasos[lote.estado])
             self.actualizado.config(text='Última actualización: ' + datetime.fromisoformat(lote.actualizado_en).strftime('%d/%m/%Y %H:%M:%S'))

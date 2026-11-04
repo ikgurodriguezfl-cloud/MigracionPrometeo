@@ -1,18 +1,17 @@
 """Pantalla de inicio de sesion."""
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox
 from auth import AuthenticationService
 
-# Tokens de diseno alineados con el panel principal (panel_lotes.py).
-FONDO_PANEL = '#f5f6fa'
+FONDO_PANEL = '#f7f5f2'
 BLANCO = '#ffffff'
-TEXTO_TITULO = '#29283e'
-TEXTO_MUTED = '#777d91'
-TEXTO_CARD = '#6f7589'
-GUINDA = '#6d0c2e'      # color principal (guinda)
-GUINDA_CLARO = '#8e2a50'  # hover / active del boton principal
-FRIO = '#ece8f6'
-BORDE_CAMPO = '#d9d7ea'
+TEXTO_TITULO = '#302a31'
+TEXTO_MUTED = '#777078'
+TEXTO_CARD = '#686168'
+GUINDA = '#6d0c2e'
+GUINDA_CLARO = '#8e2a50'
+BORDE_CAMPO = '#e2ddd8'
+CAMPO = '#fbfaf9'
 
 
 class LoginScreen:
@@ -21,46 +20,72 @@ class LoginScreen:
         self.auth_service = auth_service
         self.on_login_success = on_login_success
 
-        self.root.title('Prometeo Migrator - Inicio de sesion')
-        self.root.geometry('480x520')
-        self.root.minsize(480, 520)
-        self.root.resizable(False, False)
+        self.root.title('Iniciar sesión')
+        self.root.geometry('940x620')
+        self.root.minsize(780, 560)
+        self.root.resizable(True, True)
         self.root.configure(background=FONDO_PANEL)
         self._crear_interfaz()
 
     def _crear_interfaz(self):
-        # Fondo de pantalla uniforme (gris panel del sistema).
-        contenedor = tk.Frame(self.root, bg=FONDO_PANEL)
-        contenedor.pack(expand=True, fill='both')
+        contenedor = tk.Frame(self.root, bg=BLANCO)
+        contenedor.pack(fill='both', expand=True)
+        contenedor.grid_columnconfigure(0, weight=4, minsize=300)
+        contenedor.grid_columnconfigure(1, weight=6, minsize=440)
+        contenedor.grid_rowconfigure(0, weight=1)
 
-        # Caja blanca que encierra todo el formulario.
-        self.tarjeta = tk.Frame(contenedor, bg=BLANCO)
-        self.tarjeta.pack(expand=True, fill='both', padx=46, pady=46)
+        marca = tk.Frame(contenedor, bg=GUINDA, padx=48, pady=46)
+        marca.grid(row=0, column=0, sticky='nsew')
+        tk.Label(
+            marca, text='PROMETEO', bg=GUINDA, fg=BLANCO,
+            font=('Segoe UI', 12, 'bold'),
+        ).pack(anchor='w')
 
-        # Contenido centrado dentro de la caja blanca, con respiro respecto a los bordes.
-        interior = tk.Frame(self.tarjeta, bg=BLANCO)
-        interior.pack(expand=True, fill='both', padx=36, pady=34)
+        tk.Frame(marca, bg='#a75a75', height=2, width=48).pack(
+            anchor='w', pady=(54, 28),
+        )
+        tk.Label(
+            marca, text='De Access a\nMARC21.',
+            bg=GUINDA, fg=BLANCO, justify='left', anchor='w',
+            font=('Segoe UI', 28, 'bold'),
+        ).pack(anchor='w')
+        tk.Label(
+            marca,
+            text='Un flujo ordenado para convertir\ntu información bibliográfica.',
+            bg=GUINDA, fg='#e8dce1', justify='left', anchor='w',
+            font=('Segoe UI', 11), pady=18,
+        ).pack(anchor='w')
+        tk.Label(
+            marca, text='ACCESS     ·     MARC21     ·     MYSQL',
+            bg=GUINDA, fg='#e4cbd4', font=('Segoe UI', 8, 'bold'),
+        ).pack(side='bottom', anchor='w')
 
+        acceso = tk.Frame(contenedor, bg=BLANCO)
+        acceso.grid(row=0, column=1, sticky='nsew')
+        formulario = tk.Frame(acceso, bg=BLANCO, width=390)
+        formulario.place(relx=0.5, rely=0.48, anchor='center', width=390)
+
+        tk.Label(
+            formulario, text='INICIO DE SESIÓN', bg=BLANCO, fg=GUINDA,
+            font=('Segoe UI', 9, 'bold'),
+        ).pack(anchor='w', pady=(0, 12))
         self.lbl_titulo = tk.Label(
-            interior,
-            text='Prometeo Migrator',
-            font=('Segoe UI', 21, 'bold'),
-            fg=TEXTO_TITULO,
-            bg=BLANCO,
+            formulario, text='Qué gusto tenerte aquí',
+            font=('Segoe UI', 24, 'bold'), fg=TEXTO_TITULO, bg=BLANCO,
         )
-        self.lbl_titulo.pack(pady=(0, 8))
-
+        self.lbl_titulo.pack(anchor='w', pady=(0, 8))
         self.lbl_sub = tk.Label(
-            interior,
-            text='Sistema de migracion a MARC21',
-            font=('Segoe UI', 10),
-            fg=TEXTO_MUTED,
-            bg=BLANCO,
+            formulario, text='Ingresa tus datos para continuar.',
+            font=('Segoe UI', 10), fg=TEXTO_MUTED, bg=BLANCO,
         )
-        self.lbl_sub.pack(pady=(0, 22))
+        self.lbl_sub.pack(anchor='w', pady=(0, 28))
 
-        self.form_frame = tk.Frame(interior, bg=BLANCO)
-        self.form_frame.pack(fill='x', pady=14)
+        self.form_frame = tk.Frame(formulario, bg=BLANCO)
+        self.form_frame.pack(fill='x')
+        tk.Label(
+            acceso, text='Migración PROMETEO - MARC21',
+            bg=BLANCO, fg=TEXTO_MUTED, font=('Segoe UI', 9),
+        ).place(relx=0.5, rely=0.94, anchor='center')
 
         self.entry_usuario = None
         self.entry_contrasena = None
@@ -73,24 +98,25 @@ class LoginScreen:
         etiqueta = tk.Label(
             frame,
             text=texto,
-            font=('Segoe UI', 9),
+            font=('Segoe UI', 10, 'bold'),
             fg=TEXTO_CARD,
             bg=BLANCO,
             anchor='w',
         )
-        etiqueta.pack(fill='x', pady=(0, 4))
+        etiqueta.pack(fill='x', pady=(0, 7))
         entry = tk.Entry(
             frame,
             show=show,
-            font=('Segoe UI', 10),
-            bg=BLANCO,
+            font=('Segoe UI', 11),
+            bg=CAMPO,
             fg=TEXTO_TITULO,
             insertbackground=TEXTO_TITULO,
             highlightthickness=1,
             highlightbackground=BORDE_CAMPO,
+            highlightcolor=GUINDA,
             relief='flat',
         )
-        entry.pack(fill='x')
+        entry.pack(fill='x', ipady=8)
         entry.bind('<FocusIn>', lambda evento: entry.config(highlightbackground=GUINDA))
         entry.bind('<FocusOut>', lambda evento: entry.config(highlightbackground=BORDE_CAMPO))
         return entry
@@ -110,18 +136,18 @@ class LoginScreen:
             activeforeground=BLANCO,
             relief='flat',
             padx=24,
-            pady=8,
-            font=('Segoe UI', 10, 'bold'),
+            pady=11,
+            font=('Segoe UI', 11, 'bold'),
             cursor='hand2',
         )
         boton.pack(fill='x', pady=(16, 6))
 
     def _mostrar_login(self):
-        self.lbl_titulo.config(text='Iniciar sesion')
+        self.lbl_titulo.config(text='¡Bienvenido!')
         self._limpiar_formulario()
         self.entry_usuario = self._crear_campo('Usuario:')
-        self.entry_contrasena = self._crear_campo('Contrasena:', show='*')
-        self._crear_boton_principal('Iniciar sesion', self._iniciar_sesion)
+        self.entry_contrasena = self._crear_campo('Contraseña:', show='*')
+        self._crear_boton_principal('Iniciar sesión', self._iniciar_sesion)
         self.entry_usuario.focus()
 
     def _iniciar_sesion(self):
@@ -130,14 +156,14 @@ class LoginScreen:
 
         if not usuario or not contrasena:
             messagebox.showwarning(
-                'Atencion',
-                'Ingrese usuario y contrasena.'
+                'Faltan datos',
+                'Ingresa tu usuario y contraseña.'
             )
             return
 
         token = self.auth_service.authenticate(usuario, contrasena)
         if token is None:
-            messagebox.showerror('Acceso denegado', 'Usuario o contrasena incorrectos.')
+            messagebox.showerror('Acceso denegado', 'El usuario o la contraseña no son correctos.')
             self.entry_contrasena.delete(0, tk.END)
             return
 

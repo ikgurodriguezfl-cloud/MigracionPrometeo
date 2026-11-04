@@ -197,7 +197,9 @@ class InterfazSprint2Tests(unittest.TestCase):
             app = None
             try:
                 app = MigracionApp(raiz, HistorialLotes(Path(carpeta) / 'lotes.json'))
-                self.assertEqual(app.notebook.select(), str(app.panel_lotes))
+                self.assertFalse(hasattr(app, 'notebook'))
+                self.assertIs(app.pagina_actual, app.panel_lotes)
+                self.assertEqual(app.panel_lotes.winfo_manager(), 'grid')
                 panel = app.panel_lotes
                 panel.demo.set(True); panel._cambiar_modo()
                 self.assertEqual(len(panel.tabla.get_children()), 4)
@@ -210,6 +212,44 @@ class InterfazSprint2Tests(unittest.TestCase):
                 panel.filtro.set('En espera'); panel._pintar_tabla()
                 self.assertEqual(len(panel.tabla.get_children()), 1)
                 self.assertEqual(app.historial_lotes.listar(), [])
+            finally:
+                if app:
+                    app.cerrar()
+                else:
+                    raiz.destroy()
+
+    def test_navegacion_lateral_secuencial_habilita_pasos_al_validar(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            raiz = tk.Tk()
+            raiz.withdraw()
+            app = None
+            try:
+                app = MigracionApp(raiz, HistorialLotes(Path(carpeta) / 'lotes.json'))
+                self.assertFalse(hasattr(app, 'notebook'))
+                self.assertEqual(app.pagina_actual, app.panel_lotes)
+                for pagina in app.paginas:
+                    self.assertEqual(pagina.winfo_manager(), 'grid')
+                self.assertEqual(app._nav_items[app.frame_conexion].cget('state'), 'normal')
+                self.assertEqual(app._nav_items[app.frame_config].cget('state'), 'disabled')
+                self.assertEqual(app._nav_items[app.frame_migracion].cget('state'), 'disabled')
+                self.assertEqual(app._nav_items[app.panel_lotes].cget('state'), 'normal')
+                self.assertEqual(app._nav_items[app.frame_migracion].cget('state'), 'disabled')
+
+                origen = Path(carpeta) / 'origen.accdb'
+                origen.write_bytes(b'prueba')
+                app.var_access_path.set(str(origen))
+                app._validacion_access = app._firma_access(str(origen))
+                app._mysql_validado = True
+                app._actualizar_navegacion_secuencial()
+                self.assertEqual(app._nav_items[app.frame_config].cget('state'), 'normal')
+
+                app._navegar(app.frame_config)
+                app._continuar_a_migracion()
+                self.assertIs(app.pagina_actual, app.frame_migracion)
+                self.assertEqual(app._nav_items[app.frame_migracion].cget('state'), 'normal')
+
+                app._configuracion_modificada()
+                self.assertEqual(app._nav_items[app.frame_migracion].cget('state'), 'disabled')
             finally:
                 if app:
                     app.cerrar()
