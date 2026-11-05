@@ -45,18 +45,18 @@ class LoginScreen:
             anchor='w', pady=(54, 28),
         )
         tk.Label(
-            marca, text='De Access a\nMARC21.',
+            marca, text='Tu catálogo\nbibliográfico, listo.',
             bg=GUINDA, fg=BLANCO, justify='left', anchor='w',
             font=('Segoe UI', 28, 'bold'),
         ).pack(anchor='w')
         tk.Label(
             marca,
-            text='Un flujo ordenado para convertir\ntu información bibliográfica.',
+            text='Prepara tu información bibliográfica\npara trabajar con Koha.',
             bg=GUINDA, fg='#e8dce1', justify='left', anchor='w',
             font=('Segoe UI', 11), pady=18,
         ).pack(anchor='w')
         tk.Label(
-            marca, text='ACCESS     ·     MARC21     ·     MYSQL',
+            marca, text='GESTIÓN BIBLIOGRÁFICA     ·     KOHA',
             bg=GUINDA, fg='#e4cbd4', font=('Segoe UI', 8, 'bold'),
         ).pack(side='bottom', anchor='w')
 
