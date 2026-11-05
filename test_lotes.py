@@ -28,6 +28,39 @@ class LotesTests(unittest.TestCase):
         self.assertEqual(self.historial.listar(), [])
         self.assertFalse(self.ruta.exists())
 
+    def test_historial_de_interfaz_institucional_conserva_detalle_y_usuario(self):
+        lote = self.historial.recibir('copia.mdb', 2)
+        self.historial.actualizar(lote.id, estado='concluido', etapa='finalizado',
+            correctos=1, omitidos=1, fichas_correctas=[7])
+        documento = json.loads(self.ruta.read_text(encoding='utf-8'))
+        resultados = [
+            dict(id=7, referencia='Ficha 7', titulo='Poesía', estado='Convertida', motivos=[]),
+            dict(id=8, referencia='Ficha 8', titulo='Otra ficha', estado='Omitida', motivos=[]),
+        ]
+        documento['lotes'][0].update(resultados=resultados, usuario='operador', omitir_existentes=False)
+        self.ruta.write_text(json.dumps(documento, ensure_ascii=False), encoding='utf-8')
+        anterior = self.ruta.read_bytes()
+        recargado = HistorialLotes(self.ruta)
+        self.assertFalse(recargado.solo_lectura)
+        self.assertEqual(self.ruta.read_bytes(), anterior)
+        self.assertEqual(recargado.obtener(lote.id).resultados, resultados)
+        recargado.actualizar(lote.id, evento='Revisión del lote.')
+        persistido = HistorialLotes(self.ruta).obtener(lote.id)
+        self.assertEqual(persistido.resultados, resultados)
+        self.assertEqual(persistido.usuario, 'operador')
+        self.assertFalse(persistido.omitir_existentes)
+
+    def test_historial_con_detalle_inconsistente_se_conserva_para_revision(self):
+        lote = self.historial.recibir('copia.mdb', 1)
+        documento = json.loads(self.ruta.read_text(encoding='utf-8'))
+        documento['lotes'][0]['resultados'] = [
+            dict(id=1, referencia='Ficha 1', titulo='Prueba', estado='Convertida', motivos=[])]
+        self.ruta.write_text(json.dumps(documento), encoding='utf-8')
+        anterior = self.ruta.read_bytes()
+        recargado = HistorialLotes(self.ruta)
+        self.assertTrue(recargado.solo_lectura)
+        self.assertEqual(self.ruta.read_bytes(), anterior)
+
     def test_recibir_reutiliza_espera_y_persiste_acentos(self):
         primero = self.historial.recibir('Poesía y niñez.mdb', 100)
         segundo = self.historial.recibir('Poesía y niñez.mdb', 120)

@@ -1,8 +1,8 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "settings": {
     "agencia_catalogo": "MX-Prometeo",
-    "idioma_default": "spa",
+    "idioma_default": "und",
     "item_type_bib": "LIBR0",
     "item_type_item": "LIBR0",
     "homebranch": "ITT",
@@ -16,6 +16,10 @@
         "2": "checkedout",
         "3": "available"
       },
+      "on_unmapped": "report_omit"
+    },
+    "branch": {
+      "default": {},
       "on_unmapped": "report_omit"
     }
   },
@@ -44,41 +48,33 @@
       {
         "tag": "008",
         "data": {
-          "transform": "positions",
-          "length": 40,
-          "positions": [
-            {
-              "start": 0,
-              "literal": "000000"
-            },
-            {
-              "start": 6,
-              "literal": "s"
-            },
-            {
-              "start": 7,
-              "source": "Fecha",
-              "transform": "year",
-              "width": 4,
-              "on_missing": "literal",
-              "missing_value": "0000",
-              "report_missing": true,
-              "on_ambiguous": "report_blank"
-            },
-            {
-              "start": 18,
-              "literal": "mx"
-            },
-            {
-              "start": 21,
-              "literal": "spa"
-            },
-            {
-              "start": 29,
-              "literal": "b"
-            }
-          ]
+          "source": "DatosFijos",
+          "transform": "prometeo_008"
         }
+      },
+      {
+        "tag": "020",
+        "indicators": [
+          " ",
+          " "
+        ],
+        "subfields": [
+          {
+            "code": "a",
+            "source": "ISBN",
+            "transform": "text",
+            "on_missing": "omit"
+          }
+        ],
+        "source_tag": "020"
+      },
+      {
+        "tag": "035",
+        "source_tag": "035",
+        "indicators": [
+          " ",
+          " "
+        ]
       },
       {
         "tag": "040",
@@ -100,33 +96,13 @@
         ]
       },
       {
-        "tag": "020",
-        "indicators": [
-          " ",
-          " "
-        ],
-        "subfields": [
-          {
-            "code": "a",
-            "source": "ISBN",
-            "transform": "text",
-            "on_missing": "omit"
-          }
-        ]
-      },
-      {
         "tag": "041",
         "indicators": [
           " ",
           " "
         ],
-        "subfields": [
-          {
-            "code": "a",
-            "setting": "idioma_default",
-            "on_missing": "report_omit"
-          }
-        ]
+        "source_tag": "041",
+        "source_transform": "idioma"
       },
       {
         "tag": "082",
@@ -141,7 +117,8 @@
             "transform": "text",
             "on_missing": "omit"
           }
-        ]
+        ],
+        "source_tag": "082"
       },
       {
         "tag": "100",
@@ -156,7 +133,8 @@
             "transform": "text",
             "on_missing": "omit"
           }
-        ]
+        ],
+        "source_tag": "100"
       },
       {
         "tag": "245",
@@ -177,6 +155,65 @@
             "transform": "text",
             "on_missing": "omit"
           }
+        ],
+        "source_tag": "245",
+        "source_transform": "titulo"
+      },
+      {
+        "tag": "250",
+        "source_tag": "250",
+        "indicators": [
+          " ",
+          " "
+        ]
+      },
+      {
+        "tag": "260",
+        "source_tag": "260",
+        "indicators": [
+          " ",
+          " "
+        ],
+        "source_transform": "publicacion"
+      },
+      {
+        "tag": "300",
+        "source_tag": "300",
+        "indicators": [
+          " ",
+          " "
+        ]
+      },
+      {
+        "tag": "440",
+        "source_tag": "440",
+        "indicators": [
+          "0",
+          "0"
+        ]
+      },
+      {
+        "tag": "500",
+        "source_tag": "500",
+        "indicators": [
+          " ",
+          " "
+        ]
+      },
+      {
+        "tag": "650",
+        "source_tag": "650",
+        "indicators": [
+          " ",
+          "4"
+        ]
+      },
+      {
+        "tag": "700",
+        "source_tag": "700",
+        "indicators": [
+          "1",
+          " "
         ]
       },
       {
@@ -203,13 +240,21 @@
         "subfields": [
           {
             "code": "a",
-            "setting": "homebranch",
-            "on_missing": "report_omit"
+            "on_missing": "report_omit",
+            "source": "Biblioteca",
+            "transform": "mapped_text",
+            "mapping": "branch",
+            "fallback_setting": "homebranch",
+            "on_unmapped": "report_omit"
           },
           {
             "code": "b",
-            "setting": "holdingbranch",
-            "on_missing": "report_omit"
+            "on_missing": "report_omit",
+            "source": "Biblioteca",
+            "transform": "mapped_text",
+            "mapping": "branch",
+            "fallback_setting": "holdingbranch",
+            "on_unmapped": "report_omit"
           },
           {
             "code": "y",
@@ -230,7 +275,7 @@
             "on_missing": "omit"
           },
           {
-            "code": "z",
+            "code": "x",
             "source": "Accesible",
             "transform": "mapped_text",
             "mapping": "status",
@@ -238,7 +283,7 @@
             "on_unmapped": "report_omit"
           },
           {
-            "code": "c",
+            "code": "h",
             "transform": "volume_tomo",
             "parts": [
               {
@@ -254,9 +299,33 @@
             ],
             "on_missing": "omit",
             "on_ambiguous": "report_omit"
+          },
+          {
+            "code": "d",
+            "source": "FechaIngreso",
+            "transform": "iso_date",
+            "on_missing": "omit"
+          },
+          {
+            "code": "t",
+            "source": "Ejemplar",
+            "transform": "text",
+            "on_missing": "omit"
           }
         ]
       }
     ]
+  },
+  "access_source": {
+    "field": "EtiquetasMARC",
+    "preserve_fields": [
+      "EtiquetasMARC",
+      "DatosFijos",
+      "TipoMaterial"
+    ],
+    "local_tags": [
+      "922"
+    ],
+    "language_codes": "ara arc bul cai cat chi dan dut eng fre ger glg grc gre heb hin hun ita jpn kor lat mul myn nah nai pol por rus spa swe und zap zxx"
   }
 }

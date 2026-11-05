@@ -3,6 +3,7 @@ Lectura de base de datos Access (.mdb) de Prometeo.
 Extrae registros de FICHAS y EJEMPLARES y los devuelve como diccionarios.
 """
 import os
+import re
 import pyodbc
 from typing import List, Dict, Optional, Iterator
 from datetime import datetime
@@ -26,7 +27,7 @@ class AccessReader:
         self.driver = driver
         self.conn_str = (
             f"DRIVER={driver};"
-            f"DBQ={mdb_path};"
+            f"DBQ={mdb_path};ReadOnly=1;"
         )
         self._conn = None
 
@@ -166,7 +167,7 @@ class AccessReader:
 def parsear_etiquetas_marc(texto: Optional[str]) -> List[Dict]:
     """
     Parsea el campo EtiquetasMARC de Access.
-    Formato aproximado: ¦020¦contenido¦041¦contenido¦082895.63¦1
+    Formato compacto de Prometeo: ¦020ISBN¦041SPA¦082Clasificación.
     Devuelve lista de diccionarios: {"tag": "020", "content": "..."}
     """
     if not texto:
@@ -176,23 +177,14 @@ def parsear_etiquetas_marc(texto: Optional[str]) -> List[Dict]:
     if not texto.startswith("¦"):
         return []
 
+    # Ì es el terminador del bloque, no parte del último campo bibliográfico.
+    texto = texto.removesuffix('Ì')
     campos = []
-    partes = texto.split("¦")
-    # Las partes alternan: ["", "020", "contenido", "041", "contenido", ...]
-    i = 1
-    while i < len(partes) - 1:
-        tag = partes[i].strip()
-        contenido = partes[i + 1].strip() if i + 1 < len(partes) else ""
-        # Si el tag tiene más de 3 caracteres, puede ser que el contenido
-        # se haya pegado al tag (ej: "082895.63"). Intentar separar.
-        if len(tag) == 3 and tag.isdigit():
-            campos.append({"tag": tag, "content": contenido})
-            i += 2
-        elif len(tag) > 3 and tag[:3].isdigit():
-            campos.append({"tag": tag[:3], "content": tag[3:] + " " + contenido})
-            i += 2
-        else:
-            i += 1
+    for parte in re.split(r'¦(?=\d{3})', texto[1:]):
+        coincidencia = re.fullmatch(r'(\d{3})(.*)', parte, re.DOTALL)
+        if coincidencia:
+            tag, contenido = coincidencia.groups()
+            campos.append({'tag': tag, 'content': contenido.replace('¦', ' ').strip()})
     return campos
 
 

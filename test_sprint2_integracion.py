@@ -10,6 +10,9 @@ import tkinter as tk
 from auth import AuthenticationService
 from gui_app import MigracionApp
 from lotes import HistorialLotes
+from marc_converter import MarcConverter
+from io import StringIO
+from pymarc import parse_xml_to_array
 import main as entrada
 
 
@@ -89,6 +92,21 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.assertEqual(lote.estado, 'con_incidencias')
         self.assertEqual((lote.correctos, lote.errores, lote.progreso), (2, 1, 100))
         self.assertEqual(lote.incidencias[0]['referencia'], 'Ficha 2')
+
+    def test_el_motor_guarda_los_campos_recuperados_de_access(self):
+        self.app.marc_converter = MarcConverter()
+        self.lector.leer_fichas.return_value = [
+            dict(Ficha_No=i, Titulo='Título corto', DatosFijos='051028s1971^^^^mx^^^^^gr^^^^^000^f^spa^d',
+                 EtiquetasMARC='¦245Título completo /Responsable.¦260MEXICO :ERA,1971.¦300203 P.¦650Materia¦922Ì')
+            for i in (1, 2, 3)]
+        lote = self.ejecutar()
+        self.assertEqual(lote.correctos, 3)
+        for llamada in self.escritor.insertar_registro_marc.call_args_list:
+            registro = parse_xml_to_array(StringIO(llamada.args[2]))[0]
+            self.assertEqual(registro['260']['b'], 'ERA,')
+            self.assertEqual(registro['300']['a'], '203 P.')
+            self.assertEqual(registro['650']['a'], 'Materia')
+            self.assertEqual(registro['008'].data[7:11], '1971')
 
     def test_sucursal_sin_correspondencia_no_se_copia_como_destino(self):
         self.lector.leer_ejemplares_por_ficha.return_value = {

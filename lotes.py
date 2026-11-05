@@ -53,6 +53,10 @@ class Lote:
     incidencias: list = field(default_factory=list)
     actividad: list = field(default_factory=list)
     lote_origen: Optional[str] = None
+    # Los historiales de la interfaz institucional conservan detalle por ficha.
+    resultados: Optional[list] = None
+    usuario: Optional[str] = None
+    omitir_existentes: bool = True
 
     @property
     def procesados(self):
@@ -104,6 +108,28 @@ class Lote:
         if self.lote_origen is not None and (
                 not isinstance(self.lote_origen, str) or not self.lote_origen):
             raise ValueError('El lote de origen del reprocesamiento no es válido.')
+        if self.usuario is not None and not isinstance(self.usuario, str):
+            raise ValueError('El usuario del lote no es válido.')
+        if type(self.omitir_existentes) is not bool:
+            raise ValueError('La opción de omitir existentes debe ser booleana.')
+        if self.resultados is not None:
+            if not isinstance(self.resultados, list) or len(self.resultados) != self.procesados:
+                raise ValueError('El detalle de fichas no coincide con el total procesado.')
+            conteos = {'Convertida': 0, 'Omitida': 0, 'Rechazada': 0}
+            convertidas = []
+            for fila in self.resultados:
+                if (not isinstance(fila, dict) or fila.get('estado') not in conteos
+                        or not isinstance(fila.get('referencia'), str)
+                        or not isinstance(fila.get('titulo'), str)
+                        or not isinstance(fila.get('motivos'), list)
+                        or not all(isinstance(motivo, str) for motivo in fila['motivos'])):
+                    raise ValueError('El detalle de una ficha no es válido.')
+                conteos[fila['estado']] += 1
+                if fila['estado'] == 'Convertida':
+                    convertidas.append(fila.get('id'))
+            if (list(conteos.values()) != [self.correctos, self.omitidos, self.errores]
+                    or convertidas != self.fichas_correctas):
+                raise ValueError('Los resultados por ficha no coinciden con sus conteos.')
         for campo in ('creado_en', 'actualizado_en'):
             if datetime.fromisoformat(getattr(self, campo)).tzinfo is None:
                 raise ValueError('Las fechas del lote requieren zona horaria.')
@@ -252,7 +278,8 @@ class HistorialLotes:
     def actualizar(self, identificador, **cambios):
         permitidos = {'estado', 'etapa', 'total_objetivo', 'destino', 'version_mapeo',
                       'huella_mapeo', 'correctos', 'omitidos', 'errores', 'ejemplares',
-                      'fichas_correctas', 'incidencias'}
+                      'fichas_correctas', 'incidencias', 'resultados', 'usuario',
+                      'omitir_existentes'}
         mensaje = cambios.pop('evento', None)
         if set(cambios) - permitidos:
             raise ValueError('Se intentó cambiar un campo no permitido del lote.')

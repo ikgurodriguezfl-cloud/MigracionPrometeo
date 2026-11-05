@@ -246,11 +246,11 @@ def ejemplares_desde_registro_marc(registro):
             'num_adqui': primer_subcampo(campo, 'p') or '—',
             'biblioteca': '—',
             'branch_koha': sucursal or '—',
-            'volumen': primer_subcampo(campo, 'c') or '—',
-            'ejemplar': '—',
+            'volumen': primer_subcampo(campo, 'h') or primer_subcampo(campo, 'c') or '—',
+            'ejemplar': primer_subcampo(campo, 't') or '—',
             'tomo': '—',
-            'accesible': primer_subcampo(campo, 'z') or '—',
-            'fecha_ingreso': '—',
+            'accesible': primer_subcampo(campo, 'x') or primer_subcampo(campo, 'z') or '—',
+            'fecha_ingreso': primer_subcampo(campo, 'd') or '—',
             'signatura': primer_subcampo(campo, 'o') or '—',
         })
     return resultado
