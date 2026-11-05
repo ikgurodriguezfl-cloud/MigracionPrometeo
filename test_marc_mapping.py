@@ -1,9 +1,11 @@
 """Pruebas del motor MARC21 y su mapeo autorizado."""
 from datetime import datetime
+from io import BytesIO, StringIO
 from pathlib import Path
 import tempfile
 import unittest
 
+from pymarc import MARCReader, parse_xml_to_array
 from marc_converter import MarcConverter
 
 
@@ -104,6 +106,23 @@ class MarcMappingTests(unittest.TestCase):
             ruta.write_text('{no-json', encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'No se pudo cargar el mapeo'):
                 MarcConverter(mapping_path=str(ruta))
+
+    def test_marcxml_generado_es_completo_y_coincide_con_iso2709(self):
+        record = self.converter.ficha_a_record(
+            {'Ficha_No': 21, 'Titulo': 'Título de prueba'}, [],
+        )
+
+        marcxml = self.converter.record_a_marcxml(record)
+        registro_xml = parse_xml_to_array(StringIO(marcxml), strict=True)
+        registro_iso = next(iter(MARCReader(
+            BytesIO(self.converter.record_a_iso2709(record)),
+            to_unicode=True,
+        )))
+
+        self.assertTrue(marcxml.endswith('</collection>'))
+        self.assertEqual(len(registro_xml), 1)
+        self.assertEqual(registro_xml[0].as_dict(), registro_iso.as_dict())
+        self.assertEqual(registro_xml[0]['245']['a'], 'Título de prueba')
 
 
 if __name__ == '__main__':

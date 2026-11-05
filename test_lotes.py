@@ -7,11 +7,12 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from lotes import HistorialLotes, acciones_lote, lotes_de_ejemplo
+from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
 from pymarc import Field, Record, Subfield
 from panel_lotes import (
     campos_desde_marcxml, campos_desde_iso2709, campos_para_revision,
-    datos_grafico, filtrar_lotes, resumir_lotes,
+    datos_grafico, filtrar_lotes, record_para_edicion, resumir_lotes,
 )
 
 
@@ -33,6 +34,37 @@ class LotesTests(unittest.TestCase):
         recargado = HistorialLotes(self.ruta).obtener(primero.id)
         self.assertEqual(recargado.total_recibidos, 120)
         self.assertIn('Poesía', recargado.fuente)
+
+    def test_reprocesamiento_crea_un_intento_vinculado_sin_tocar_el_lote_origen(self):
+        origen = self.historial.recibir('copia.mdb', 3)
+        origen = self.historial.actualizar(
+            origen.id, estado='concluido', etapa='finalizado',
+            correctos=3, fichas_correctas=[1, 2, 3],
+        )
+
+        intento = self.historial.recibir_reprocesamiento(origen.id, 3)
+
+        self.assertNotEqual(intento.id, origen.id)
+        self.assertEqual(intento.lote_origen, origen.id)
+        self.assertEqual(intento.total_objetivo, origen.total_objetivo)
+        self.assertEqual(self.historial.obtener(origen.id).correctos, 3)
+        self.assertTrue(acciones_lote(origen)['reprocesar'])
+        self.assertFalse(acciones_lote(intento)['reprocesar'])
+        recargado = HistorialLotes(self.ruta).obtener(intento.id)
+        self.assertEqual(recargado.lote_origen, origen.id)
+
+    def test_reprocesamiento_rechaza_lote_activo_o_respaldo_con_conteo_distinto(self):
+        activo = self.historial.recibir('activo.mdb', 2)
+        with self.assertRaisesRegex(ValueError, 'finalizados o detenidos'):
+            self.historial.recibir_reprocesamiento(activo.id, 2)
+
+        terminado = self.historial.recibir('terminado.mdb', 2)
+        self.historial.actualizar(
+            terminado.id, estado='concluido', etapa='finalizado',
+            correctos=2, fichas_correctas=[1, 2],
+        )
+        with self.assertRaisesRegex(ValueError, 'número de fichas distinto'):
+            self.historial.recibir_reprocesamiento(terminado.id, 3)
 
     def test_persiste_version_y_huella_del_mapeo_marc(self):
         lote = self.historial.recibir('mapeo.mdb', 1)
@@ -84,6 +116,10 @@ class LotesTests(unittest.TestCase):
         ejemplos = lotes_de_ejemplo()
         for lote in ejemplos:
             acciones = acciones_lote(lote, fuente_validada=True, destino_coincide=True)
+            self.assertEqual(
+                acciones['reprocesar'],
+                lote.estado in ('concluido', 'con_incidencias', 'detenido'),
+            )
             self.assertEqual(acciones['iniciar'], lote.estado == 'en_espera')
             self.assertEqual(acciones['exportar'], lote.estado == 'concluido')
             self.assertEqual(acciones['revision'], bool(lote.correctos))
@@ -240,6 +276,205 @@ class LotesTests(unittest.TestCase):
             writer.obtener_registros_revision([12])
         with self.assertRaises(ValueError):
             writer.obtener_registros_revision([True])
+
+    def test_marcxml_completo_y_iso2709_equivalente_se_validan(self):
+        record = Record(force_utf8=True)
+        record.leader = '00000nam a2200000 i 4500'
+        record.add_field(Field(tag='001', data='123'))
+        record.add_field(Field(tag='005', data='20261104120000.0'))
+        record.add_field(Field(tag='008', data='0' * 40))
+        record.add_field(Field(
+            tag='040', indicators=[' ', ' '],
+            subfields=[Subfield('a', 'ABC'), Subfield('c', 'ABC')],
+        ))
+        record.add_field(Field(
+            tag='245', indicators=['1', '0'],
+            subfields=[Subfield('a', 'Title')],
+        ))
+
+        marcxml = MarcConverter().record_a_marcxml(record)
+        validado = MySQLWriter._validar_registro_propuesto(
+            marcxml, record.as_marc(),
+        )
+
+        self.assertTrue(marcxml.endswith('</collection>'))
+        self.assertEqual(validado['001'].data, '123')
+        with self.assertRaisesRegex(ValueError, 'exactamente un registro'):
+            MySQLWriter._validar_registro_propuesto(
+                marcxml, record.as_marc() * 2,
+            )
+
+    def test_rechaza_fecha_marc_005_incompleta(self):
+        record = Record(force_utf8=True)
+        record.leader = '00000nam a2200000 i 4500'
+        record.add_field(Field(tag='001', data='123'))
+        record.add_field(Field(tag='005', data='20261104120000'))
+        record.add_field(Field(tag='008', data='0' * 40))
+        record.add_field(Field(
+            tag='040', indicators=[' ', ' '],
+            subfields=[Subfield('a', 'ABC'), Subfield('c', 'ABC')],
+        ))
+        record.add_field(Field(
+            tag='245', indicators=['1', '0'],
+            subfields=[Subfield('a', 'Title')],
+        ))
+        marcxml = MarcConverter().record_a_marcxml(record)
+
+        with self.assertRaisesRegex(ValueError, '005 debe tener el formato MARC'):
+            MySQLWriter._validar_registro_propuesto(marcxml, record.as_marc())
+
+    def test_editor_recupera_marcxml_o_permite_reconstruir_ficha_corrupta(self):
+        record = Record(force_utf8=True)
+        record.add_field(Field(tag='001', data='123'))
+        marcxml = MarcConverter().record_a_marcxml(record)
+
+        recuperado, aviso = record_para_edicion({
+            'marca_marcxml': marcxml,
+            'marca_iso2709': b'invalido',
+        })
+        self.assertEqual(recuperado['001'].data, '123')
+        self.assertIn('ISO2709', aviso)
+
+        nuevo, aviso = record_para_edicion({
+            'marca_marcxml': '<xml roto',
+            'marca_iso2709': b'invalido',
+        })
+        self.assertEqual(str(nuevo.leader), '00000nam a2200000 i 4500')
+        self.assertIn('ficha vacía', aviso)
+
+    def test_quien_propone_no_puede_resolver_su_propuesta(self):
+        cursor = MagicMock()
+        cursor.fetchone.return_value = {'propuesto_por': 'revisor'}
+        writer = MySQLWriter({})
+        writer._conn = MagicMock()
+        writer.conn.cursor.return_value.__enter__.return_value = cursor
+
+        with self.assertRaisesRegex(ValueError, 'no puede aprobarla ni rechazarla'):
+            writer.resolver_correccion(7, 'LOTE-1', 'revisor', True)
+
+        writer.conn.rollback.assert_called_once()
+        writer.conn.commit.assert_not_called()
+        self.assertEqual(cursor.execute.call_count, 1)
+
+    def test_reprocesamiento_inserta_solo_ejemplares_que_no_existen(self):
+        cursor = MagicMock()
+        cursor.fetchone.return_value = {'id': 42}
+        cursor.fetchall.return_value = [{
+            'num_adqui': 'BAR-1', 'biblioteca': 'CENTRAL',
+            'branch_koha': 'CEN', 'volumen': None, 'ejemplar': None,
+            'tomo': None, 'accesible': None, 'fecha_ingreso': None,
+            'signatura': 'QA76',
+        }]
+        writer = MySQLWriter({})
+        writer._conn = MagicMock()
+        writer.conn.cursor.return_value.__enter__.return_value = cursor
+        existentes = {
+            'NumAdqui': 'BAR-1', 'Biblioteca': 'CENTRAL',
+        }
+        faltante = {
+            'NumAdqui': 'BAR-2', 'Biblioteca': 'OTRA',
+        }
+
+        with patch.object(writer, 'insertar_ejemplar') as insertar:
+            agregados, sin_mapeo = writer.insertar_ejemplares_faltantes(
+                7, [existentes, faltante],
+                {'CENTRAL': 'CEN', 'OTRA': 'OTR'}, signatura='QA76',
+            )
+
+        self.assertEqual(agregados, 1)
+        self.assertEqual(sin_mapeo, [])
+        insertar.assert_called_once_with(42, 7, faltante, 'OTR', 'QA76')
+
+    def test_observacion_se_valida_y_se_guarda_con_evento_de_auditoria(self):
+        cursor = MagicMock()
+        cursor.lastrowid = 15
+        writer = MySQLWriter({})
+        writer._conn = MagicMock()
+        writer.conn.cursor.return_value.__enter__.return_value = cursor
+
+        observacion_id = writer.registrar_observacion_revision(
+            'LOTE-1', 17, 'revisora', 'Verificar campo 245.',
+        )
+
+        self.assertEqual(observacion_id, 15)
+        self.assertEqual(cursor.execute.call_count, 2)
+        self.assertIn('INSERT INTO observaciones_revision', cursor.execute.call_args_list[0].args[0])
+        self.assertEqual(
+            cursor.execute.call_args_list[0].args[1],
+            ('LOTE-1', 17, 'revisora', 'Verificar campo 245.'),
+        )
+        self.assertIn('INSERT INTO log_migracion', cursor.execute.call_args_list[1].args[0])
+        writer.conn.commit.assert_called_once()
+
+        with self.assertRaisesRegex(ValueError, '5000 caracteres'):
+            writer.registrar_observacion_revision(
+                'LOTE-1', 17, 'revisora', 'x' * 5001,
+            )
+
+    def test_listar_observaciones_filtra_por_lote_y_ficha(self):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [{
+            'id': 1, 'usuario': 'revisora',
+            'observacion': 'Validar 245$a', 'fecha': '2026-11-04 10:00:00',
+        }]
+        writer = MySQLWriter({})
+        writer._conn = MagicMock()
+        writer.conn.cursor.return_value.__enter__.return_value = cursor
+
+        observaciones = writer.listar_observaciones_revision('LOTE-1', 17)
+
+        self.assertEqual(observaciones[0]['observacion'], 'Validar 245$a')
+        self.assertEqual(cursor.execute.call_args.args[1], ('LOTE-1', 17))
+
+    def test_aprobar_correccion_actualiza_marc_y_audita_en_una_transaccion(self):
+        record = Record(force_utf8=True)
+        record.leader = '00000nam a2200000 i 4500'
+        record.add_field(Field(tag='001', data='123'))
+        record.add_field(Field(tag='005', data='20261104120000.0'))
+        record.add_field(Field(tag='008', data='0' * 40))
+        record.add_field(Field(
+            tag='040', indicators=[' ', ' '],
+            subfields=[Subfield('a', 'ABC'), Subfield('c', 'ABC')],
+        ))
+        record.add_field(Field(
+            tag='245', indicators=['1', '0'],
+            subfields=[Subfield('a', 'Title')],
+        ))
+        marcxml = MarcConverter().record_a_marcxml(record)
+        iso2709 = record.as_marc()
+        cursor = MagicMock()
+        cursor.fetchone.side_effect = [
+            {
+                'id': 7, 'id_ficha_acceso': 123,
+                'marca_marcxml_propuesta': marcxml,
+                'marca_iso2709_propuesta': iso2709,
+                'huella_original': MySQLWriter.huella_registro(
+                    '<record/>', b'original',
+                ),
+                'propuesto_por': 'revisor',
+            },
+            {
+                'marca_marcxml': '<record/>',
+                'marca_iso2709': b'original',
+            },
+        ]
+        writer = MySQLWriter({})
+        writer._conn = MagicMock()
+        writer.conn.cursor.return_value.__enter__.return_value = cursor
+
+        resultado = writer.resolver_correccion(7, 'LOTE-1', 'aprobador', True)
+
+        self.assertEqual(resultado, 'APROBADA')
+        writer.conn.commit.assert_called_once()
+        writer.conn.rollback.assert_not_called()
+        self.assertTrue(any(
+            'UPDATE registros_marc SET marca_marcxml' in llamada.args[0]
+            for llamada in cursor.execute.call_args_list
+        ))
+        self.assertTrue(any(
+            'INSERT INTO log_migracion' in llamada.args[0]
+            for llamada in cursor.execute.call_args_list
+        ))
 
     def test_no_exporta_omitidos_como_nuevos_registros(self):
         lote = self.historial.recibir('copia.mdb', 10)

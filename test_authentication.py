@@ -7,6 +7,7 @@ from pathlib import Path
 import bcrypt
 
 from auth import AuthenticationService
+from permissions import MATRIZ_PERMISOS, tiene_permiso
 
 
 class AuthenticationTests(unittest.TestCase):
@@ -70,6 +71,35 @@ class AuthenticationTests(unittest.TestCase):
         token = self.service.authenticate('revisor_test', 'clave-123')
         perfil = self.service.get_profile(token)
         self.assertEqual(perfil, 'Revision')
+        self.assertEqual(self.service.get_username(token), 'revisor_test')
+
+    def test_roles_anteriores_se_mapean_a_perfiles_de_minimo_privilegio(self):
+        self.service.create_user('usuario_anterior', 'clave-123', 'user')
+        token = self.service.authenticate('usuario_anterior', 'clave-123')
+
+        self.assertEqual(self.service.get_profile(token), 'Ejecucion')
+
+        token_admin = self.service.authenticate('admin', 'correcta-123')
+        self.assertEqual(self.service.get_profile(token_admin), 'Administracion')
+
+    def test_aprobacion_y_administracion_comparten_permisos_salvo_gestion_usuarios(self):
+        operaciones = set(MATRIZ_PERMISOS) - {'gestionar_usuarios'}
+
+        for operacion in operaciones:
+            with self.subTest(operacion=operacion):
+                self.assertEqual(
+                    tiene_permiso('Aprobacion', operacion),
+                    tiene_permiso('Administracion', operacion),
+                )
+
+        self.assertFalse(tiene_permiso('Aprobacion', 'gestionar_usuarios'))
+        self.assertTrue(tiene_permiso('Administracion', 'gestionar_usuarios'))
+
+    def test_ejecucion_revision_y_aprobacion_pueden_ver_incidencias_y_reportes(self):
+        for perfil in ('Ejecucion', 'Revision', 'Aprobacion', 'Administracion'):
+            with self.subTest(perfil=perfil):
+                self.assertTrue(tiene_permiso(perfil, 'ver_incidencias'))
+                self.assertTrue(tiene_permiso(perfil, 'exportar_historial'))
 
 
 if __name__ == '__main__':

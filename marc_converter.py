@@ -1,5 +1,5 @@
 """Construye registros MARC21 desde reglas declarativas versionadas."""
-from io import BytesIO
+from io import BytesIO, StringIO
 from copy import deepcopy
 from datetime import date, datetime
 from hashlib import sha256
@@ -7,9 +7,16 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from pymarc import Field, Record, Subfield, XMLWriter
+from pymarc import (
+    Field, MARCReader, Record, Subfield, XMLWriter, parse_xml_to_array,
+)
 
 from access_reader import formatear_fecha_marc
+
+
+class _NonClosingBytesIO(BytesIO):
+    def close(self):
+        self.flush()
 
 
 class MarcConverter:
@@ -350,13 +357,29 @@ class MarcConverter:
         return record
 
     def record_a_marcxml(self, record: Record) -> str:
-        buffer = BytesIO()
+        iso2709 = record.as_marc()
+        registro_normalizado = next(
+            iter(MARCReader(BytesIO(iso2709), to_unicode=True)), None,
+        )
+        if registro_normalizado is None:
+            raise ValueError('No se pudo normalizar el registro MARC para exportarlo.')
+        buffer = _NonClosingBytesIO()
         writer = XMLWriter(buffer)
         try:
-            writer.write(record)
-            return buffer.getvalue().decode('utf-8')
+            writer.write(registro_normalizado)
         finally:
             writer.close()
+        marcxml = buffer.getvalue().decode('utf-8')
+        try:
+            registros_xml = parse_xml_to_array(StringIO(marcxml), strict=True)
+        except Exception as exc:
+            raise ValueError(f'No se pudo generar un MARCXML válido: {exc}') from exc
+        if (len(registros_xml) != 1
+                or registros_xml[0].as_dict() != registro_normalizado.as_dict()):
+            raise ValueError(
+                'El MARCXML generado no coincide con el registro ISO2709.'
+            )
+        return marcxml
 
     def record_a_iso2709(self, record: Record) -> bytes:
         return record.as_marc()

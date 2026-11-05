@@ -15,7 +15,9 @@ from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
 from lotes import HistorialLotes, acciones_lote
 from panel_lotes import PanelLotes
-from permissions import requerir_permiso, AccesoDenegado, MATRIZ_PERMISOS
+from permissions import (
+    requerir_permiso, AccesoDenegado, tiene_permiso,
+)
 
 
 class _DetencionSolicitada(Exception):
@@ -89,6 +91,7 @@ class MigracionApp:
         self._detencion_solicitada = threading.Event()
         self.historial_lotes = historial_lotes if historial_lotes is not None else HistorialLotes()
         self._lote_actual_id = None
+        self._lote_reprocesar_id = None
         self._validacion_access = None
         self._eventos_ui = Queue()
         self._cerrando = False
@@ -153,8 +156,14 @@ class MigracionApp:
             self.page_container, listar=self.historial_lotes.listar, politica=self._politica_lote,
             iniciar=self._iniciar_desde_panel, exportar=self._exportar_marcxml,
             revisar=self._obtener_registros_revision,
-            conexiones=lambda: self._navegar(self.frame_conexion),
+            proponer=self._proponer_correccion,
+            listar_propuestas=self._listar_correcciones_pendientes,
+            resolver_propuesta=self._resolver_correccion,
+            listar_observaciones=self._listar_observaciones_revision,
+            registrar_observacion=self._registrar_observacion_revision,
+            conexiones=self._preparar_nueva_migracion,
             detener=self._solicitar_detencion,
+            reprocesar=self._reprocesar_desde_panel,
         )
         self.paginas = (
             self.panel_lotes,
@@ -190,7 +199,7 @@ class MigracionApp:
             pie, text=self.perfil_usuario, bg=self.COLORES['barra_lateral'],
             fg='#ffffff', font=('Segoe UI', 10, 'bold'),
         ).pack(anchor='w', pady=(3, 0))
-        if self.auth_service is not None and self.auth_service.is_admin(self.session_token):
+        if tiene_permiso(self.perfil_usuario, 'gestionar_usuarios'):
             tk.Button(
                 pie, text='Crear usuario', command=self._abrir_registro_usuario,
                 anchor='w', padx=0, pady=8, bd=0, relief='flat',
@@ -290,9 +299,40 @@ class MigracionApp:
         estilo.configure('TCheckbutton', background=colores['superficie'],
                          foreground=colores['texto'])
     def _navegar(self, pantalla):
+        if not self._pagina_autorizada(pantalla):
+            messagebox.showerror(
+                'Acceso restringido',
+                'Tu perfil no tiene permiso para abrir esta sección.',
+            )
+            return
         self.pagina_actual = pantalla
         pantalla.tkraise()
         self._actualizar_navegacion_secuencial()
+
+    def _pagina_autorizada(self, pantalla):
+        if pantalla is self.panel_lotes:
+            return self.perfil_usuario in (
+                'Ejecucion', 'Revision', 'Aprobacion', 'Administracion',
+            )
+        permiso_por_pagina = {
+            self.frame_conexion: 'validar_access',
+            self.frame_config: 'editar_configuracion',
+            self.frame_migracion: 'iniciar_conversion',
+            self.frame_log: 'ver_actividad',
+        }
+        permiso = permiso_por_pagina.get(pantalla)
+        return permiso is not None and tiene_permiso(self.perfil_usuario, permiso)
+
+    def _requiere_permiso(self, operacion):
+        if not self._sesion_valida():
+            return False
+        try:
+            requerir_permiso(self.perfil_usuario, operacion)
+            return True
+        except AccesoDenegado as error:
+            messagebox.showerror('Acceso restringido', str(error))
+            self.log(f'[BLOQUEO SEGURIDAD] {error}')
+            return False
 
     def _cambio_configuracion_mysql(self, *_):
         self._mysql_validado = False
@@ -309,18 +349,29 @@ class MigracionApp:
         configuracion_lista = getattr(self, '_configuracion_confirmada', False)
         actual = self.pagina_actual
         disponible = {
-            self.panel_lotes: True,
-            self.frame_conexion: not self.migracion_en_curso,
-            self.frame_config: conexiones_listas and not self.migracion_en_curso,
-            self.frame_migracion: conexiones_listas and configuracion_lista,
-            self.frame_log: True,
+            self.panel_lotes: self._pagina_autorizada(self.panel_lotes),
+            self.frame_conexion: (
+                self._pagina_autorizada(self.frame_conexion)
+                and not self.migracion_en_curso
+            ),
+            self.frame_config: (
+                self._pagina_autorizada(self.frame_config)
+                and conexiones_listas and not self.migracion_en_curso
+            ),
+            self.frame_migracion: (
+                self._pagina_autorizada(self.frame_migracion)
+                and conexiones_listas and configuracion_lista
+            ),
+            self.frame_log: self._pagina_autorizada(self.frame_log),
         }
         if not disponible.get(actual, False):
-            actual = (
-                self.frame_config if conexiones_listas and not configuracion_lista
-                else self.frame_conexion if not conexiones_listas
-                else self.panel_lotes
-            )
+            actual = self.panel_lotes
+            if self._pagina_autorizada(self.frame_conexion):
+                actual = (
+                    self.frame_config
+                    if conexiones_listas and not configuracion_lista
+                    else self.frame_conexion
+                )
             self.pagina_actual = actual
             actual.tkraise()
 
@@ -345,6 +396,8 @@ class MigracionApp:
             )
 
     def _continuar_a_configuracion(self):
+        if not self._requiere_permiso('editar_configuracion'):
+            return
         if not self._validacion_access or not self._mysql_validado:
             messagebox.showwarning(
                 'Completa la conexión',
@@ -354,6 +407,8 @@ class MigracionApp:
         self._navegar(self.frame_config)
 
     def _continuar_a_migracion(self):
+        if not self._requiere_permiso('iniciar_conversion'):
+            return
         try:
             branch_mapping = self._parsear_json_texto(self.txt_mapeo.get('1.0', tk.END), {})
             status_mapping = self._parsear_json_texto(
@@ -706,7 +761,7 @@ class MigracionApp:
         self.txt_status.insert('1.0', json.dumps(status_map, indent=2, ensure_ascii=False))
 
     def _guardar_config(self):
-        if not self._sesion_valida():
+        if not self._requiere_permiso('editar_configuracion'):
             return
         try:
             branch_mapping = self._parsear_json_texto(self.txt_mapeo.get('1.0', tk.END), {})
@@ -817,7 +872,45 @@ class MigracionApp:
                                  lote_activo_id=self._lote_actual_id, detencion_solicitada=self._detencion_solicitada.is_set())
         politica['revision'] = bool(
             politica['revision']
-            and self.perfil_usuario in MATRIZ_PERMISOS['revision_muestra']
+            and tiene_permiso(self.perfil_usuario, 'revision_muestra')
+        )
+        politica['nueva_migracion'] = tiene_permiso(
+            self.perfil_usuario, 'iniciar_nueva_migracion',
+        )
+        politica['incidencias'] = bool(
+            politica['incidencias']
+            and tiene_permiso(self.perfil_usuario, 'ver_incidencias')
+        )
+        politica['proponer_correccion'] = bool(
+            politica['revision']
+            and tiene_permiso(self.perfil_usuario, 'proponer_correccion')
+        )
+        politica['aprobar_correccion'] = bool(
+            politica['revision']
+            and tiene_permiso(self.perfil_usuario, 'aprobar_correccion')
+        )
+        politica['registrar_observacion'] = bool(
+            politica['revision']
+            and tiene_permiso(self.perfil_usuario, 'registrar_observacion')
+        )
+        politica['reprocesar'] = bool(
+            politica.get('reprocesar')
+            and tiene_permiso(self.perfil_usuario, 'reprocesar_lote')
+        )
+        politica['exportar'] = bool(
+            politica['exportar']
+            and tiene_permiso(self.perfil_usuario, 'aprobar_exportacion')
+        )
+        politica['exportar_historial'] = tiene_permiso(
+            self.perfil_usuario, 'exportar_historial',
+        )
+        politica['iniciar'] = bool(
+            politica['iniciar']
+            and tiene_permiso(self.perfil_usuario, 'iniciar_conversion')
+        )
+        politica['detener'] = bool(
+            politica['detener']
+            and tiene_permiso(self.perfil_usuario, 'detener_conversion')
         )
         if self.historial_lotes.solo_lectura:
             politica['iniciar'] = False
@@ -829,13 +922,21 @@ class MigracionApp:
         self.panel_lotes.actualizar()
         lote = self.historial_lotes.obtener(self._lote_actual_id)
         self.btn_exportar.configure(state='normal' if self._politica_lote(lote)['exportar'] else 'disabled')
-        self.btn_ejecutar.configure(state='disabled' if self.migracion_en_curso or self.historial_lotes.solo_lectura else 'normal')
+        self.btn_ejecutar.configure(
+            state='normal' if (
+                tiene_permiso(self.perfil_usuario, 'iniciar_conversion')
+                and not self.migracion_en_curso
+                and not self.historial_lotes.solo_lectura
+            ) else 'disabled',
+        )
         politica = self._politica_lote(lote)
         self.btn_detener.configure(state='normal' if politica['detener'] else 'disabled',
                                   text='Deteniendo…' if politica['detencion_solicitada'] else 'Detener migración')
         self._actualizar_navegacion_secuencial()
 
     def _solicitar_detencion(self, identificador=None):
+        if not self._requiere_permiso('detener_conversion'):
+            return
         identificador = identificador or self._lote_actual_id
         lote = self.historial_lotes.obtener(identificador)
         if not self._politica_lote(lote)['detener']:
@@ -852,6 +953,57 @@ class MigracionApp:
             return
         self._lote_actual_id = identificador
         self._iniciar_migracion()
+
+    def _preparar_nueva_migracion(self):
+        self._lote_reprocesar_id = None
+        self._navegar(self.frame_conexion)
+
+    def _reprocesar_desde_panel(self, identificador):
+        if not self._requiere_permiso('reprocesar_lote'):
+            return
+        lote = self.historial_lotes.obtener(identificador)
+        if not self._politica_lote(lote).get('reprocesar'):
+            messagebox.showwarning(
+                'Reprocesamiento no disponible',
+                'Solo se pueden reprocesar lotes finalizados, detenidos o con incidencias.',
+            )
+            return
+        if not lote.destino:
+            messagebox.showerror(
+                'Destino no registrado',
+                'El lote no tiene un destino MySQL guardado y no se puede reprocesar con seguridad.',
+            )
+            return
+        if not os.path.isfile(lote.fuente):
+            messagebox.showerror(
+                'Respaldo no disponible',
+                'No se encontró el archivo Access usado por este lote. Selecciona o restaura el respaldo original.',
+            )
+            return
+        if not messagebox.askyesno(
+            'Reprocesar lote',
+            f'Se creará un nuevo intento a partir de {identificador}. '
+            'Los registros MARC existentes no se reemplazarán; se volverán '
+            'a revisar las fichas y se completarán los registros o ejemplares faltantes. '
+            'Deberás validar Access y MySQL antes de iniciar. ¿Continuar?',
+        ):
+            return
+
+        self._lote_reprocesar_id = lote.id
+        self.var_access_path.set(lote.fuente)
+        self.var_limite.set(
+            str(lote.total_objetivo)
+            if lote.total_objetivo < lote.total_recibidos else '0'
+        )
+        self.var_saltar_existentes.set(True)
+        self.entry_host.set(lote.destino['host'])
+        self.entry_port.set(str(lote.destino['port']))
+        self.entry_db.set(lote.destino['database'])
+        self._validacion_access = None
+        self._mysql_validado = False
+        self._configuracion_confirmada = False
+        self._actualizar_info_access()
+        self._navegar(self.frame_conexion)
 
     def cerrar(self):
         if self.migracion_en_curso:
@@ -890,30 +1042,104 @@ class MigracionApp:
 
         ventana = tk.Toplevel(self.root)
         ventana.title('Crear usuario')
-        ventana.resizable(False, False)
+        ventana.geometry('520x620')
+        ventana.minsize(480, 580)
         ventana.transient(self.root)
         ventana.grab_set()
+        ventana.configure(background=self.COLORES['fondo'])
+        ventana.columnconfigure(0, weight=1)
+        ventana.rowconfigure(1, weight=1)
 
-        formulario = ttk.Frame(ventana, padding=20)
-        formulario.pack(fill='both', expand=True)
-        ttk.Label(formulario, text='Nuevo usuario').grid(row=0, column=0, columnspan=2, pady=(0, 12))
-        
-        ttk.Label(formulario, text='Usuario:').grid(row=1, column=0, sticky='e', padx=5, pady=5)
-        entrada_usuario = ttk.Entry(formulario, width=30)
-        entrada_usuario.grid(row=1, column=1, padx=5, pady=5)
-        
-        ttk.Label(formulario, text='Contrasena:').grid(row=2, column=0, sticky='e', padx=5, pady=5)
-        entrada_contrasena = ttk.Entry(formulario, width=30, show='*')
-        entrada_contrasena.grid(row=2, column=1, padx=5, pady=5)
-        
-        ttk.Label(formulario, text='Repetir contrasena:').grid(row=3, column=0, sticky='e', padx=5, pady=5)
-        entrada_confirmacion = ttk.Entry(formulario, width=30, show='*')
-        entrada_confirmacion.grid(row=3, column=1, padx=5, pady=5)
+        encabezado = tk.Frame(ventana, bg=self.COLORES['barra_lateral'], padx=24, pady=20)
+        encabezado.grid(row=0, column=0, sticky='ew')
+        encabezado.columnconfigure(1, weight=1)
+        tk.Label(
+            encabezado, text='P', width=2, height=1,
+            bg='#ffffff', fg=self.COLORES['guinda'],
+            font=('Segoe UI', 18, 'bold'),
+        ).grid(row=0, column=0, rowspan=2, sticky='w', padx=(0, 14), ipady=3)
+        tk.Label(
+            encabezado, text='Crear cuenta de usuario',
+            bg=self.COLORES['barra_lateral'], fg='#ffffff',
+            font=('Segoe UI', 16, 'bold'), anchor='w',
+        ).grid(row=0, column=1, sticky='ew')
+        tk.Label(
+            encabezado,
+            text='Registra el acceso y asigna el perfil de trabajo correspondiente.',
+            bg=self.COLORES['barra_lateral'],
+            fg=self.COLORES['barra_lateral_muted'],
+            font=('Segoe UI', 9), anchor='w', wraplength=410, justify='left',
+        ).grid(row=1, column=1, sticky='ew', pady=(4, 0))
 
-        ttk.Label(formulario, text='Perfil/Rol:').grid(row=4, column=0, sticky='e', padx=5, pady=5)
-        combo_perfil = ttk.Combobox(formulario, values=["Ejecucion", "Revision", "Aprobacion", "Administracion"], state='readonly', width=27)
+        formulario = ttk.Frame(ventana, style='App.TFrame', padding=(28, 22, 28, 12))
+        formulario.grid(row=1, column=0, sticky='nsew')
+        formulario.columnconfigure(0, weight=1)
+        ttk.Label(
+            formulario, text='Datos de acceso', style='CardTitle.TLabel',
+        ).grid(row=0, column=0, sticky='w', pady=(0, 14))
+
+        ttk.Label(formulario, text='Nombre de usuario', style='Field.TLabel').grid(
+            row=1, column=0, sticky='w', pady=(0, 5),
+        )
+        entrada_usuario = ttk.Entry(formulario)
+        entrada_usuario.grid(row=2, column=0, sticky='ew', pady=(0, 14), ipady=2)
+
+        ttk.Label(formulario, text='Contraseña', style='Field.TLabel').grid(
+            row=3, column=0, sticky='w', pady=(0, 5),
+        )
+        entrada_contrasena = ttk.Entry(formulario, show='*')
+        entrada_contrasena.grid(row=4, column=0, sticky='ew', pady=(0, 12), ipady=2)
+
+        ttk.Label(formulario, text='Confirmar contraseña', style='Field.TLabel').grid(
+            row=5, column=0, sticky='w', pady=(0, 5),
+        )
+        entrada_confirmacion = ttk.Entry(formulario, show='*')
+        entrada_confirmacion.grid(row=6, column=0, sticky='ew', pady=(0, 4), ipady=2)
+
+        mostrar_contrasena = tk.BooleanVar(value=False)
+
+        def alternar_visibilidad():
+            mascara = '' if mostrar_contrasena.get() else '*'
+            entrada_contrasena.configure(show=mascara)
+            entrada_confirmacion.configure(show=mascara)
+
+        ttk.Checkbutton(
+            formulario, text='Mostrar contraseñas',
+            variable=mostrar_contrasena, command=alternar_visibilidad,
+        ).grid(row=7, column=0, sticky='w', pady=(0, 18))
+
+        ttk.Separator(formulario).grid(row=8, column=0, sticky='ew', pady=(0, 16))
+        ttk.Label(
+            formulario, text='Perfil de acceso', style='Field.TLabel',
+        ).grid(row=9, column=0, sticky='w', pady=(0, 5))
+        combo_perfil = ttk.Combobox(
+            formulario,
+            values=('Ejecucion', 'Revision', 'Aprobacion', 'Administracion'),
+            state='readonly',
+        )
         combo_perfil.current(0)
-        combo_perfil.grid(row=4, column=1, padx=5, pady=5)
+        combo_perfil.grid(row=10, column=0, sticky='ew')
+        descripcion_perfil = ttk.Label(
+            formulario, style='CardHint.TLabel', wraplength=450,
+        )
+        descripcion_perfil.grid(row=11, column=0, sticky='w', pady=(7, 0))
+        descripciones = {
+            'Ejecucion': 'Puede validar los orígenes, ejecutar y reprocesar migraciones, '
+                         'consultar incidencias y descargar reportes.',
+            'Revision': 'Puede consultar registros, registrar observaciones y proponer '
+                        'correcciones. No puede ejecutar ni reprocesar migraciones.',
+            'Aprobacion': 'Puede ejecutar, revisar, aprobar correcciones, exportar '
+                          'registros y gestionar el flujo completo de migración.',
+            'Administracion': 'Tiene los mismos permisos operativos que Aprobación y, '
+                              'además, puede crear usuarios.',
+        }
+
+        def mostrar_descripcion_perfil(_evento=None):
+            perfil = combo_perfil.get()
+            descripcion_perfil.config(text=descripciones.get(perfil, ''))
+
+        combo_perfil.bind('<<ComboboxSelected>>', mostrar_descripcion_perfil)
+        mostrar_descripcion_perfil()
 
         def registrar():
             try:
@@ -936,9 +1162,19 @@ class MigracionApp:
             messagebox.showinfo('Cuenta creada', f'El usuario fue creado con perfil {perfil}.', parent=ventana)
             ventana.destroy()
 
-        ttk.Button(formulario, text='Crear usuario', command=registrar).grid(
-            row=5, column=0, columnspan=2, pady=(14, 0)
-        )
+        acciones = ttk.Frame(ventana, style='App.TFrame', padding=(28, 12, 28, 22))
+        acciones.grid(row=2, column=0, sticky='ew')
+        acciones.columnconfigure(0, weight=1)
+        ttk.Button(
+            acciones, text='Cancelar', style='Quiet.TButton',
+            command=ventana.destroy,
+        ).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(
+            acciones, text='Crear usuario', style='Primary.TButton',
+            command=registrar,
+        ).grid(row=0, column=2)
+        ventana.bind('<Escape>', lambda _evento: ventana.destroy())
+        ventana.bind('<Return>', lambda _evento: registrar())
         entrada_usuario.focus()
 
     def _seleccionar_access(self):
@@ -1013,10 +1249,19 @@ class MigracionApp:
             if reader.test_connection():
                 total = reader.contar_fichas()
                 reader.close()
-                lote = self.historial_lotes.recibir(path, total)
-                self._lote_actual_id = lote.id
+                if self._lote_reprocesar_id:
+                    origen = self.historial_lotes.obtener(self._lote_reprocesar_id)
+                    if origen is None or os.path.abspath(path) != os.path.abspath(origen.fuente):
+                        raise ValueError('El archivo Access no coincide con el lote seleccionado para reprocesar.')
+                    if total != origen.total_recibidos:
+                        raise ValueError('El respaldo tiene un número de fichas distinto al lote original.')
+                    lote_id = origen.id
+                else:
+                    lote = self.historial_lotes.recibir(path, total)
+                    lote_id = lote.id
+                self._lote_actual_id = lote_id
                 self._validacion_access = self._firma_access(path)
-                self.panel_lotes.seleccionar_real(lote.id)
+                self.panel_lotes.seleccionar_real(lote_id)
                 self._actualizar_panel()
                 self.lbl_conteo_access.config(text='Registros FICHAS: ' + str(total))
                 self.log('[OK] Conexion Access exitosa. ' + str(total) + ' fichas encontradas.')
@@ -1028,7 +1273,7 @@ class MigracionApp:
             messagebox.showerror('Error', 'No se pudo conectar a Access:\n' + str(e))
 
     def _probar_mysql(self):
-        if not self._sesion_valida():
+        if not self._requiere_permiso('validar_mysql'):
             return
         self._mysql_validado = False
         self._configuracion_confirmada = False
@@ -1150,15 +1395,28 @@ class MigracionApp:
                 total = reader.contar_fichas()
             finally:
                 reader.close()
-            lote = self.historial_lotes.recibir(path_access, total)
-            self._lote_actual_id = lote.id
             self._validacion_access = self._firma_access(path_access)
-            self.panel_lotes.seleccionar_real(lote.id)
+            lote_origen = (
+                self.historial_lotes.obtener(self._lote_reprocesar_id)
+                if self._lote_reprocesar_id else None
+            )
+            if self._lote_reprocesar_id and (
+                    lote_origen is None
+                    or os.path.abspath(path_access) != os.path.abspath(lote_origen.fuente)
+                    or total != lote_origen.total_recibidos):
+                raise ValueError(
+                    'El archivo Access ya no coincide con el lote seleccionado para reprocesar.'
+                )
+            if not self._lote_reprocesar_id:
+                lote = self.historial_lotes.recibir(path_access, total)
+                self._lote_actual_id = lote.id
+                self.panel_lotes.seleccionar_real(lote.id)
             if not total:
-                self.historial_lotes.actualizar(lote.id, estado='con_incidencias',
-                    incidencias=[{'referencia': 'Origen', 'mensaje': 'El respaldo no contiene fichas para migrar.'}],
-                    evento='Ejecución detenida: el respaldo no contiene fichas.')
-                self._actualizar_panel()
+                if not self._lote_reprocesar_id:
+                    self.historial_lotes.actualizar(lote.id, estado='con_incidencias',
+                        incidencias=[{'referencia': 'Origen', 'mensaje': 'El respaldo no contiene fichas para migrar.'}],
+                        evento='Ejecución detenida: el respaldo no contiene fichas.')
+                    self._actualizar_panel()
                 messagebox.showwarning('Sin registros', 'El respaldo no contiene fichas para migrar.')
                 return
         except Exception as exc:
@@ -1187,6 +1445,20 @@ class MigracionApp:
             messagebox.showerror('Mapeo no válido', str(exc))
             return
         self.marc_converter = conversor
+
+        if self._lote_reprocesar_id:
+            try:
+                lote = self.historial_lotes.recibir_reprocesamiento(
+                    self._lote_reprocesar_id, total,
+                )
+            except (OSError, ValueError) as exc:
+                messagebox.showerror('No se pudo crear el reprocesamiento', str(exc))
+                return
+            limite = lote.total_objetivo if lote.total_objetivo < total else 0
+            saltar = True
+            self._lote_reprocesar_id = None
+            self._lote_actual_id = lote.id
+            self.panel_lotes.seleccionar_real(lote.id)
 
         try:
             self.historial_lotes.actualizar(lote.id, estado='en_proceso', etapa='conexion',
@@ -1273,6 +1545,26 @@ class MigracionApp:
                 try:
                     id_ficha = int(ficha['Ficha_No'])
                     if saltar and writer.registrar_existe(id_ficha):
+                        if lote.lote_origen:
+                            ejemplares = reader.leer_ejemplares_por_ficha(
+                                [id_ficha],
+                            ).get(id_ficha, [])
+                            agregados, sucursales_sin_mapeo = (
+                                writer.insertar_ejemplares_faltantes(
+                                    id_ficha, ejemplares, branch_mapping,
+                                    signatura=ficha.get('Clasificacion'),
+                                )
+                            )
+                            cont_ejemplares += agregados
+                            for codigo in sorted(set(sucursales_sin_mapeo)):
+                                mensaje = (
+                                    f'No se pudo asignar una sucursal Koha para '
+                                    f'Biblioteca={codigo!r} durante el reprocesamiento.'
+                                )
+                                incidencias.append({
+                                    'referencia': f'Ficha {id_ficha} · Biblioteca',
+                                    'mensaje': mensaje,
+                                })
                         cont_omitidos += 1
                     else:
                         ejemplares = reader.leer_ejemplares_por_ficha([id_ficha]).get(id_ficha, [])
@@ -1500,5 +1792,153 @@ class MigracionApp:
             if password:
                 mensaje = mensaje.replace(password, '***')
             raise RuntimeError(mensaje) from exc
+        finally:
+            writer.close()
+
+    def _usuario_actual(self):
+        if self.auth_service is None:
+            return 'sesion-local'
+        return self.auth_service.get_username(self.session_token)
+
+    def _writer_revision(self):
+        return MySQLWriter({
+            **self._destino_actual(),
+            'user': self.entry_user.get(),
+            'password': self.entry_pass.get(),
+            'charset': 'utf8mb4',
+        })
+
+    def _validar_lote_revision(self, lote_id, permiso):
+        if not self._sesion_valida():
+            raise PermissionError('La sesión ya no es válida. Inicia sesión nuevamente.')
+        try:
+            requerir_permiso(self.perfil_usuario, permiso)
+        except AccesoDenegado as exc:
+            raise PermissionError(str(exc)) from exc
+        lote = self.historial_lotes.obtener(lote_id)
+        if lote is None:
+            raise ValueError('No se encontró el lote solicitado.')
+        if not lote.destino or lote.destino != self._destino_actual():
+            raise ValueError(
+                'El destino MySQL debe coincidir con el usado por el lote.'
+            )
+        return lote
+
+    @staticmethod
+    def _error_mysql_sin_secreto(error, password):
+        mensaje = str(error)
+        return mensaje.replace(password, '***') if password else mensaje
+
+    def _proponer_correccion(self, lote_id, id_ficha, marcxml, iso2709,
+                             huella_original):
+        lote = self._validar_lote_revision(lote_id, 'proponer_correccion')
+        if type(id_ficha) is not int or id_ficha not in lote.fichas_correctas:
+            raise ValueError('La ficha no pertenece a los registros correctos de este lote.')
+        writer = self._writer_revision()
+        try:
+            writer.connect()
+            registro = writer.obtener_registros_revision([id_ficha])
+            if not registro:
+                raise ValueError('No se encontró el registro MARC en el destino.')
+            if registro[0]['huella_revision'] != huella_original:
+                raise ValueError(
+                    'El registro cambió desde que se abrió para edición. '
+                    'Actualiza la revisión y vuelve a proponer la corrección.'
+                )
+            propuesta_id = writer.proponer_correccion(
+                lote_id, id_ficha, marcxml, iso2709, huella_original,
+                self._usuario_actual(),
+            )
+            self.historial_lotes.actualizar(
+                lote.id,
+                evento=f'Corrección de ficha {id_ficha} propuesta; pendiente de aprobación.',
+            )
+            return propuesta_id
+        except Exception as exc:
+            password = writer.config.get('password')
+            raise RuntimeError(
+                self._error_mysql_sin_secreto(exc, password),
+            ) from exc
+        finally:
+            writer.close()
+
+    def _listar_correcciones_pendientes(self, lote_id):
+        self._validar_lote_revision(lote_id, 'aprobar_correccion')
+        writer = self._writer_revision()
+        try:
+            writer.connect()
+            return writer.listar_correcciones_pendientes(lote_id)
+        except Exception as exc:
+            password = writer.config.get('password')
+            raise RuntimeError(
+                self._error_mysql_sin_secreto(exc, password),
+            ) from exc
+        finally:
+            writer.close()
+
+    def _resolver_correccion(self, lote_id, propuesta_id, aprobar):
+        permiso = 'aprobar_correccion' if aprobar else 'rechazar_correccion'
+        lote = self._validar_lote_revision(lote_id, permiso)
+        if type(propuesta_id) is not int or type(aprobar) is not bool:
+            raise ValueError('La decisión sobre la propuesta no es válida.')
+        writer = self._writer_revision()
+        try:
+            writer.connect()
+            estado = writer.resolver_correccion(
+                propuesta_id, lote_id, self._usuario_actual(), aprobar,
+            )
+            self.historial_lotes.actualizar(
+                lote.id,
+                evento=f'Corrección MARC #{propuesta_id} {estado.lower()} por aprobación.',
+            )
+            return estado
+        except Exception as exc:
+            password = writer.config.get('password')
+            raise RuntimeError(
+                self._error_mysql_sin_secreto(exc, password),
+            ) from exc
+        finally:
+            writer.close()
+
+    def _validar_ficha_observacion(self, lote, id_ficha):
+        if type(id_ficha) is not int or id_ficha not in lote.fichas_correctas:
+            raise ValueError('La ficha no pertenece a los registros correctos de este lote.')
+
+    def _listar_observaciones_revision(self, lote_id, id_ficha):
+        lote = self._validar_lote_revision(lote_id, 'registrar_observacion')
+        self._validar_ficha_observacion(lote, id_ficha)
+        writer = self._writer_revision()
+        try:
+            writer.connect()
+            writer.crear_tablas()
+            return writer.listar_observaciones_revision(lote_id, id_ficha)
+        except Exception as exc:
+            password = writer.config.get('password')
+            raise RuntimeError(
+                self._error_mysql_sin_secreto(exc, password),
+            ) from exc
+        finally:
+            writer.close()
+
+    def _registrar_observacion_revision(self, lote_id, id_ficha, observacion):
+        lote = self._validar_lote_revision(lote_id, 'registrar_observacion')
+        self._validar_ficha_observacion(lote, id_ficha)
+        writer = self._writer_revision()
+        try:
+            writer.connect()
+            writer.crear_tablas()
+            observacion_id = writer.registrar_observacion_revision(
+                lote_id, id_ficha, self._usuario_actual(), observacion,
+            )
+            self.historial_lotes.actualizar(
+                lote.id,
+                evento=f'Observación #{observacion_id} registrada para ficha {id_ficha}.',
+            )
+            return observacion_id
+        except Exception as exc:
+            password = writer.config.get('password')
+            raise RuntimeError(
+                self._error_mysql_sin_secreto(exc, password),
+            ) from exc
         finally:
             writer.close()

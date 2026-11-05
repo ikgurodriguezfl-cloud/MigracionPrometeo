@@ -52,6 +52,7 @@ class Lote:
     fichas_correctas: list = field(default_factory=list)
     incidencias: list = field(default_factory=list)
     actividad: list = field(default_factory=list)
+    lote_origen: Optional[str] = None
 
     @property
     def procesados(self):
@@ -100,6 +101,9 @@ class Lote:
             raise ValueError('La versión y huella del mapeo deben ser válidas y registrarse juntas.')
         if not isinstance(self.fuente, str) or not self.fuente or not isinstance(self.id, str) or not self.id:
             raise ValueError('El lote necesita identificador y fuente.')
+        if self.lote_origen is not None and (
+                not isinstance(self.lote_origen, str) or not self.lote_origen):
+            raise ValueError('El lote de origen del reprocesamiento no es válido.')
         for campo in ('creado_en', 'actualizado_en'):
             if datetime.fromisoformat(getattr(self, campo)).tzinfo is None:
                 raise ValueError('Las fechas del lote requieren zona horaria.')
@@ -123,6 +127,10 @@ def acciones_lote(lote, ocupado=False, fuente_validada=False, destino_coincide=F
     activo = bool(real and ocupado and lote.id == lote_activo_id and lote.estado == 'en_proceso')
     return {
         'iniciar': bool(real and not ocupado and fuente_validada and lote.estado == 'en_espera'),
+        'reprocesar': bool(
+            real and not ocupado
+            and lote.estado in ('concluido', 'con_incidencias', 'detenido')
+        ),
         'resumen': bool(lote and lote.estado in ('concluido', 'con_incidencias', 'detenido')),
         'incidencias': bool(lote and (lote.errores or lote.incidencias)),
         'revision': bool(real and not ocupado and destino_coincide and lote.correctos),
@@ -207,6 +215,39 @@ class HistorialLotes:
             self._guardar(lotes)
             self._lotes = lotes
             return copy.deepcopy(lote)
+
+    def recibir_reprocesamiento(self, identificador, total):
+        if type(total) is not int or total < 0:
+            raise ValueError('El conteo del respaldo debe ser un entero no negativo.')
+        with self._lock:
+            lotes = copy.deepcopy(self._lotes)
+            origen = next(
+                (item for item in lotes if item.id == identificador), None,
+            )
+            if origen is None:
+                raise ValueError('No se encontró el lote que se desea reprocesar.')
+            if origen.estado not in ('concluido', 'con_incidencias', 'detenido'):
+                raise ValueError('Solo se pueden reprocesar lotes ya finalizados o detenidos.')
+            if total != origen.total_recibidos:
+                raise ValueError(
+                    'El respaldo tiene un número de fichas distinto al lote original.'
+                )
+            if origen.total_objetivo > total:
+                raise ValueError('El alcance del lote original no es válido para reprocesar.')
+
+            nuevo = Lote(
+                f'LOTE-{datetime.now():%Y%m%d}-{uuid4().hex[:8].upper()}',
+                origen.fuente, total, origen.total_objetivo,
+                lote_origen=origen.id,
+            )
+            nuevo.evento(
+                f'Reprocesamiento del lote {origen.id}. Se conservarán los '
+                'registros existentes y se completarán los faltantes.'
+            )
+            lotes.append(nuevo)
+            self._guardar(lotes)
+            self._lotes = lotes
+            return copy.deepcopy(nuevo)
 
     def actualizar(self, identificador, **cambios):
         permitidos = {'estado', 'etapa', 'total_objetivo', 'destino', 'version_mapeo',

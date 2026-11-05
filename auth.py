@@ -74,8 +74,14 @@ class AuthenticationService:
         """Devuelve el perfil asociado al token de sesión actual."""
         self.require_authenticated(token)
         rol_actual = self._active_sessions[token].get('role', 'Ejecucion')
-        # Homologa el rol por defecto del sistema con la matriz de permisos
-        return 'Administracion' if rol_actual == 'admin' else rol_actual
+        return {
+            'admin': 'Administracion',
+            'user': 'Ejecucion',
+        }.get(rol_actual, rol_actual)
+
+    def get_username(self, token: str) -> str:
+        self.require_authenticated(token)
+        return self._active_sessions[token]['username']
 
     def ensure_admin(self, password: str):
         """Crea o actualiza la cuenta admin compartida del entorno."""

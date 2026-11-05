@@ -50,6 +50,39 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.assertGreater(self.app._eventos_ui.qsize(), 0)
         self.lector.close.assert_called_once(); self.escritor.close.assert_called_once()
 
+    def test_reprocesamiento_no_reemplaza_registros_y_completa_ejemplares_faltantes(self):
+        origen = self.historial.actualizar(
+            self.lote.id, estado='concluido', etapa='finalizado',
+            total_objetivo=3, correctos=3, fichas_correctas=[1, 2, 3],
+        )
+        intento = self.historial.recibir_reprocesamiento(origen.id, 3)
+        self.historial.actualizar(
+            intento.id, estado='en_proceso', etapa='conexion',
+            destino=origen.destino,
+        )
+        self.escritor.registrar_existe.return_value = True
+        self.escritor.insertar_ejemplares_faltantes.return_value = (1, [])
+
+        with patch(
+                'gui_app.AccessReader', return_value=self.lector), patch(
+                'gui_app.MySQLWriter', return_value=self.escritor):
+            self.app._ejecutar_migracion(
+                'copia.mdb', {'password': 'CLAVE_PRIVADA'}, 0, True,
+                {}, {}, intento.id,
+            )
+
+        reprocesado = self.historial.obtener(intento.id)
+        self.assertEqual(reprocesado.lote_origen, origen.id)
+        self.assertEqual(
+            (reprocesado.correctos, reprocesado.omitidos, reprocesado.errores),
+            (0, 3, 0),
+        )
+        self.assertEqual(reprocesado.ejemplares, 3)
+        self.assertEqual(
+            self.escritor.insertar_ejemplares_faltantes.call_count, 3,
+        )
+        self.escritor.insertar_registro_marc.assert_not_called()
+
     def test_error_por_registro_no_se_anuncia_como_concluido(self):
         self.escritor.insertar_registro_marc.side_effect = [1, ValueError('dato inválido'), 3]
         lote = self.ejecutar()
@@ -246,15 +279,66 @@ class IntegracionSprint2Tests(unittest.TestCase):
 
         self.app.perfil_usuario = 'Ejecucion'
         self.assertFalse(self.app._politica_lote(lote)['revision'])
+        self.assertTrue(self.app._politica_lote(lote)['exportar_historial'])
+        self.assertTrue(self.app._politica_lote(lote)['reprocesar'])
         self.app.perfil_usuario = 'Revision'
         self.assertTrue(self.app._politica_lote(lote)['revision'])
+        self.assertFalse(self.app._politica_lote(lote)['reprocesar'])
+        self.assertTrue(self.app._politica_lote(lote)['exportar_historial'])
+        self.app.perfil_usuario = 'Aprobacion'
+        self.assertTrue(self.app._politica_lote(lote)['revision'])
+        self.assertTrue(self.app._politica_lote(lote)['reprocesar'])
+        self.assertTrue(self.app._politica_lote(lote)['exportar_historial'])
         self.app.perfil_usuario = 'Administracion'
         self.assertTrue(self.app._politica_lote(lote)['revision'])
+        self.assertTrue(self.app._politica_lote(lote)['reprocesar'])
+        self.assertTrue(self.app._politica_lote(lote)['exportar_historial'])
+
+    def test_revision_puede_registrar_observacion_asociada_a_ficha(self):
+        lote = self.historial.actualizar(
+            self.lote.id, estado='concluido', etapa='finalizado',
+            total_objetivo=3, correctos=3, fichas_correctas=[1, 2, 3],
+        )
+        self.app.perfil_usuario = 'Revision'
+        self.app.auth_service = None
+        self.app.entry_host = Mock()
+        self.app.entry_port = Mock()
+        self.app.entry_db = Mock()
+        self.app.entry_user = Mock()
+        self.app.entry_user.get.return_value = 'revisora'
+        self.app.entry_pass = Mock()
+        self.app.entry_pass.get.return_value = ''
+        self.app._destino_actual = Mock(return_value=lote.destino)
+        self.app._usuario_actual = Mock(return_value='revisora')
+
+        writer = Mock()
+        writer.registrar_observacion_revision.return_value = 23
+        with patch('gui_app.MySQLWriter', return_value=writer):
+            observacion_id = self.app._registrar_observacion_revision(
+                lote.id, 2, 'Revisar el 245$a.',
+            )
+
+        self.assertEqual(observacion_id, 23)
+        writer.registrar_observacion_revision.assert_called_once_with(
+            lote.id, 2, 'revisora', 'Revisar el 245$a.',
+        )
+        self.assertIn(
+            'Observación #23',
+            self.historial.obtener(lote.id).actividad[-1]['mensaje'],
+        )
+
+        self.app.perfil_usuario = 'Ejecucion'
+        with patch('gui_app.MySQLWriter') as crear_writer:
+            with self.assertRaises(PermissionError):
+                self.app._registrar_observacion_revision(
+                    lote.id, 2, 'No autorizado.',
+                )
+        crear_writer.assert_not_called()
 
     def test_perfiles_sin_permiso_no_llegan_al_motor_ni_al_exportador(self):
         for perfil, operacion in (
             ('Revision', self.app._probar_access),
-            ('Aprobacion', self.app._iniciar_migracion),
+            ('Revision', self.app._iniciar_migracion),
             ('Ejecucion', self.app._exportar_marcxml),
         ):
             with self.subTest(perfil=perfil, operacion=operacion.__name__), \

@@ -2,15 +2,19 @@
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 import csv
-from io import BytesIO
+from io import BytesIO, StringIO
 import json
 import os
+import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from xml.sax import SAXException
 from xml.etree import ElementTree
+from pymarc import Field, MARCReader, Record, Subfield, parse_xml_to_array
+from marc_converter import MarcConverter
+from mysql_writer import MySQLWriter
 
 from lotes import ESTADOS, ETAPAS, lotes_de_ejemplo
-from pymarc import MARCReader
 
 
 def resumir_lotes(lotes):
@@ -208,17 +212,108 @@ def campos_para_revision(registro):
         )
 
 
+def record_desde_iso2709(contenido):
+    if not contenido:
+        raise ValueError('El registro no contiene MARC ISO2709 para editar.')
+    try:
+        record = next(iter(MARCReader(BytesIO(contenido), to_unicode=True)), None)
+    except Exception as exc:
+        raise ValueError(f'No se pudo leer el registro MARC: {exc}') from exc
+    if record is None:
+        raise ValueError('El registro ISO2709 está vacío o no es válido.')
+    return record
+
+
+def record_para_edicion(registro):
+    errores = []
+    try:
+        return record_desde_iso2709(registro.get('marca_iso2709')), ''
+    except ValueError as exc:
+        errores.append(f'ISO2709: {exc}')
+
+    try:
+        registros = parse_xml_to_array(
+            StringIO(registro.get('marca_marcxml') or ''), strict=True,
+        )
+        if len(registros) != 1:
+            raise ValueError('El MARCXML no contiene exactamente un registro.')
+        return registros[0], (
+            'Aviso: la copia ISO2709 no se pudo leer; los campos se '
+            'recuperaron desde MARCXML.'
+        )
+    except (ValueError, TypeError, UnicodeError, SAXException) as exc:
+        errores.append(f'MARCXML: {exc}')
+
+    record = Record(force_utf8=True)
+    record.leader = '00000nam a2200000 i 4500'
+    return record, (
+        'Aviso: no se pudo recuperar ninguna copia del registro. Se abrió '
+        'una ficha vacía para capturar todos los campos MARC obligatorios. '
+        + ' '.join(errores)
+    )
+
+
+def parsear_subcampos(texto):
+    resultado = []
+    for parte in texto.split('|'):
+        parte = parte.strip()
+        coincidencia = re.fullmatch(r'\$([a-z0-9])\s+(.+)', parte, re.DOTALL)
+        if not coincidencia:
+            raise ValueError(
+                'Escribe los subcampos como «$a valor | $b valor». '
+                'Cada subcampo requiere código y contenido.'
+            )
+        resultado.append(Subfield(coincidencia.group(1), coincidencia.group(2).strip()))
+    if not resultado:
+        raise ValueError('Agrega por lo menos un subcampo.')
+    return resultado
+
+
+def campo_desde_editor(tag, indicadores, contenido):
+    tag = tag.strip()
+    if not re.fullmatch(r'\d{3}', tag):
+        raise ValueError('La etiqueta MARC debe contener tres dígitos.')
+    if tag < '010':
+        if not contenido.strip():
+            raise ValueError(f'El campo de control {tag} requiere contenido.')
+        if indicadores.strip():
+            raise ValueError('Los campos de control no llevan indicadores.')
+        return Field(tag=tag, data=contenido)
+    indicadores = indicadores.replace('#', ' ')
+    if len(indicadores) != 2 or any(ord(char) < 32 for char in indicadores):
+        raise ValueError('Un campo de datos requiere exactamente dos indicadores.')
+    return Field(
+        tag=tag, indicators=list(indicadores),
+        subfields=parsear_subcampos(contenido),
+    )
+
+
+def serializar_registro(record):
+    xml = MarcConverter().record_a_marcxml(record)
+    iso2709 = record.as_marc()
+    MySQLWriter._validar_registro_propuesto(xml, iso2709)
+    return xml, iso2709
+
+
 class PanelLotes(ttk.Frame):
     def __init__(self, parent, listar, politica, iniciar, exportar, revisar,
-                 conexiones, detener):
+                 proponer, listar_propuestas, resolver_propuesta,
+                 listar_observaciones, registrar_observacion,
+                 conexiones, detener, reprocesar):
         super().__init__(parent, padding=16, style='Panel.TFrame')
         self.listar = listar
         self.politica = politica
         self.iniciar = iniciar
         self.exportar = exportar
         self.revisar = revisar
+        self.proponer = proponer
+        self.listar_propuestas = listar_propuestas
+        self.resolver_propuesta = resolver_propuesta
+        self.listar_observaciones = listar_observaciones
+        self.registrar_observacion = registrar_observacion
         self.conexiones = conexiones
         self.detener = detener
+        self.reprocesar = reprocesar
         self.seleccionado = None
         self.lotes = []
         self.demo = tk.BooleanVar(value=False)
@@ -268,10 +363,11 @@ class PanelLotes(ttk.Frame):
             style='Secondary.TButton', command=self._exportar_historial,
         )
         self.btn_exportar_historial.pack(side='left', padx=(0, 8))
-        ttk.Button(
+        self.btn_nueva_migracion = ttk.Button(
             acciones_cabecera, text='Nueva migración', style='Primary.TButton',
             command=self.conexiones,
-        ).pack(side='right')
+        )
+        self.btn_nueva_migracion.pack(side='right')
         self.aviso = ttk.Label(
             self, text='Selecciona un lote para ver su estado y las acciones disponibles.',
             style='Panel.TLabel',
@@ -446,6 +542,11 @@ class PanelLotes(ttk.Frame):
         self.btn_iniciar.pack(side='left', fill='x', expand=True, padx=(0, 4))
         self.btn_detener = ttk.Button(control, text='Detener migración', command=self._detener)
         self.btn_detener.pack(side='left', fill='x', expand=True)
+        self.btn_reprocesar = ttk.Button(
+            acciones, text='Reprocesar pendientes',
+            command=self._reprocesar,
+        )
+        self.btn_reprocesar.pack(fill='x', pady=3)
         self.btn_exportar = ttk.Button(acciones, text='Exportar MARCXML del lote', command=self._exportar)
         self.btn_exportar.pack(fill='x', pady=3)
         self.btn_revisar = ttk.Button(
@@ -480,7 +581,16 @@ class PanelLotes(ttk.Frame):
         self.lbl_lectura_rapida.config(text=self._texto_lectura_rapida(resumen))
         self._pintar_recientes()
         self.btn_exportar_historial.configure(
-            state='disabled' if self.demo.get() or not self.lotes else 'normal',
+            state='normal' if (
+                not self.demo.get() and self.lotes
+                and self.politica(None, False).get('exportar_historial')
+            ) else 'disabled',
+        )
+        self.btn_nueva_migracion.configure(
+            state='normal' if (
+                not self.demo.get()
+                and self.politica(None, False).get('nueva_migracion', False)
+            ) else 'disabled',
         )
         self._pintar_grafico()
         if seleccionar and not self.demo.get():
@@ -583,7 +693,8 @@ class PanelLotes(ttk.Frame):
             )
 
     def _exportar_historial(self):
-        if self.demo.get() or not self.lotes:
+        if (self.demo.get() or not self.lotes
+                or not self.politica(None, False).get('exportar_historial')):
             return
         ruta = filedialog.asksaveasfilename(
             parent=self, title='Exportar historial de migraciones',
@@ -706,15 +817,22 @@ class PanelLotes(ttk.Frame):
                 'con_incidencias': 'Revisa las incidencias antes de continuar.',
                 'detenido': 'Avance conservado. Este lote no se reanuda automáticamente.',
             }
-            self.siguiente.config(text=pasos[lote.estado])
+            siguiente = pasos[lote.estado]
+            if lote.lote_origen:
+                siguiente = f'Reprocesamiento de {lote.lote_origen}. {siguiente}'
+            self.siguiente.config(text=siguiente)
             self.actualizado.config(text='Última actualización: ' + datetime.fromisoformat(lote.actualizado_en).strftime('%d/%m/%Y %H:%M:%S'))
         politica = self.politica(lote, self.demo.get())
         for accion, boton in (
             ('iniciar', self.btn_iniciar), ('detener', self.btn_detener),
+            ('reprocesar', self.btn_reprocesar),
             ('exportar', self.btn_exportar), ('revision', self.btn_revisar),
             ('incidencias', self.btn_incidencias), ('resumen', self.btn_resumen),
         ):
             boton.configure(state='normal' if politica[accion] else 'disabled')
+        self.btn_nueva_migracion.configure(
+            state='normal' if politica.get('nueva_migracion', False) else 'disabled',
+        )
         solicitada = politica['detencion_solicitada']
         self.btn_detener.configure(text='Deteniendo…' if solicitada else 'Detener migración')
         if solicitada:
@@ -892,6 +1010,7 @@ class PanelLotes(ttk.Frame):
         estado_pagina.grid(row=0, column=1, sticky='ew', padx=8)
         inicio_pagina = 0
         registros_actuales = []
+        registro_seleccionado = [None]
 
         def mostrar_registro(_evento=None):
             seleccion = lista_registros.selection()
@@ -904,6 +1023,13 @@ class PanelLotes(ttk.Frame):
             )
             if registro is None:
                 return
+            registro_seleccionado[0] = registro
+            boton_reparar.configure(state='disabled')
+            boton_observaciones.configure(
+                state='normal' if self.politica(
+                    lote, self.demo.get(),
+                ).get('registrar_observacion') else 'disabled',
+            )
             lbl_registro.config(
                 text=f'Ficha {registro["id_ficha_acceso"]} · '
                      f'MARC 001: {registro.get("id_control") or "Sin valor"} · '
@@ -925,6 +1051,9 @@ class PanelLotes(ttk.Frame):
             lbl_aviso_registro.config(
                 text=aviso, foreground='#a36d23' if aviso else '#686168',
             )
+            if aviso and self.politica(
+                    lote, self.demo.get()).get('proponer_correccion'):
+                boton_reparar.configure(state='normal')
             for campo in campos:
                 tabla_campos.insert(
                     '', 'end',
@@ -946,6 +1075,537 @@ class PanelLotes(ttk.Frame):
             texto_xml.delete('1.0', tk.END)
             texto_xml.insert('1.0', registro['marca_marcxml'])
             texto_xml.configure(state='disabled')
+
+        def registrar_observacion():
+            registro = registro_seleccionado[0]
+            if (registro is None or not self.politica(
+                    lote, self.demo.get()).get('registrar_observacion')):
+                return
+            dialogo = tk.Toplevel(ventana)
+            dialogo.title(
+                f'Observaciones · ficha {registro["id_ficha_acceso"]}',
+            )
+            dialogo.geometry('760x510')
+            dialogo.minsize(620, 420)
+            dialogo.transient(ventana)
+            dialogo.columnconfigure(0, weight=1)
+            dialogo.rowconfigure(1, weight=1)
+            ttk.Label(
+                dialogo,
+                text='Observaciones previas de esta ficha (autor, fecha y nota):',
+                style='Panel.TLabel',
+            ).grid(row=0, column=0, sticky='w', padx=12, pady=(12, 6))
+            tabla_notas = ttk.Treeview(
+                dialogo, columns=('fecha', 'usuario', 'nota'),
+                show='headings', style='Lotes.Treeview',
+            )
+            for columna, titulo, ancho in (
+                ('fecha', 'Fecha', 150), ('usuario', 'Usuario', 120),
+                ('nota', 'Observación', 420),
+            ):
+                tabla_notas.heading(columna, text=titulo)
+                tabla_notas.column(
+                    columna, width=ancho, minwidth=90,
+                    stretch=columna == 'nota', anchor='w',
+                )
+            tabla_notas.grid(
+                row=1, column=0, sticky='nsew', padx=12, pady=(0, 8),
+            )
+            notas_scroll = ttk.Scrollbar(
+                dialogo, orient='vertical', command=tabla_notas.yview,
+            )
+            notas_scroll.grid(row=1, column=1, sticky='ns', pady=(0, 8))
+            tabla_notas.configure(yscrollcommand=notas_scroll.set)
+
+            def cargar_observaciones():
+                try:
+                    observaciones = self.listar_observaciones(
+                        lote.id, registro['id_ficha_acceso'],
+                    )
+                except Exception as exc:
+                    messagebox.showerror(
+                        'No se pudieron consultar las observaciones',
+                        str(exc), parent=dialogo,
+                    )
+                    return False
+                tabla_notas.delete(*tabla_notas.get_children())
+                for observacion in observaciones:
+                    fecha = observacion['fecha']
+                    tabla_notas.insert(
+                        '', 'end',
+                        values=(
+                            fecha.strftime('%Y-%m-%d %H:%M:%S')
+                            if hasattr(fecha, 'strftime') else str(fecha),
+                            observacion['usuario'], observacion['observacion'],
+                        ),
+                    )
+                return True
+
+            ttk.Label(
+                dialogo, text='Nueva observación (máximo 5000 caracteres):',
+                style='Panel.TLabel',
+            ).grid(row=2, column=0, sticky='w', padx=12, pady=(0, 4))
+            texto_observacion = tk.Text(
+                dialogo, height=4, wrap='word',
+                font=('Segoe UI', 10), relief='solid', bd=1,
+            )
+            texto_observacion.grid(
+                row=3, column=0, sticky='ew', padx=12,
+            )
+
+            def guardar_observacion():
+                texto = texto_observacion.get('1.0', 'end-1c')
+                try:
+                    self.registrar_observacion(
+                        lote.id, registro['id_ficha_acceso'], texto,
+                    )
+                except Exception as exc:
+                    messagebox.showerror(
+                        'No se pudo guardar la observación', str(exc),
+                        parent=dialogo,
+                    )
+                    return
+                texto_observacion.delete('1.0', tk.END)
+                cargar_observaciones()
+
+            botones_observacion = ttk.Frame(dialogo, padding=12)
+            botones_observacion.grid(row=4, column=0, sticky='ew')
+            ttk.Button(
+                botones_observacion, text='Cerrar',
+                command=dialogo.destroy,
+            ).pack(side='right')
+            ttk.Button(
+                botones_observacion, text='Guardar observación',
+                style='Primary.TButton', command=guardar_observacion,
+            ).pack(side='right', padx=(0, 8))
+            cargar_observaciones()
+
+        def proponer_reparacion_xml():
+            registro = registro_seleccionado[0]
+            if (registro is None or not self.politica(
+                    lote, self.demo.get()).get('proponer_correccion')):
+                return
+            try:
+                record = record_desde_iso2709(registro.get('marca_iso2709'))
+                marcxml, iso2709 = serializar_registro(record)
+                propuesta_id = self.proponer(
+                    lote.id, registro['id_ficha_acceso'], marcxml, iso2709,
+                    registro['huella_revision'],
+                )
+            except Exception as exc:
+                messagebox.showerror(
+                    'No se pudo proponer la reparación',
+                    f'No se pudo regenerar el MARCXML desde ISO2709. '
+                    f'Revisa o completa los campos manualmente: {exc}',
+                    parent=ventana,
+                )
+                return
+            messagebox.showinfo(
+                'Reparación pendiente',
+                f'La reparación MARCXML de la ficha '
+                f'{registro["id_ficha_acceso"]} quedó como propuesta '
+                f'#{propuesta_id}. Aprobación debe revisarla y aplicarla.',
+                parent=ventana,
+            )
+            cargar_pagina(inicio_pagina)
+
+        def editar_registro():
+            registro = registro_seleccionado[0]
+            if (registro is None
+                    or not self.politica(lote, self.demo.get()).get('proponer_correccion')):
+                return
+            record, aviso_edicion = record_para_edicion(registro)
+            if aviso_edicion:
+                messagebox.showwarning(
+                    'Recuperación del registro', aviso_edicion, parent=ventana,
+                )
+
+            editor = tk.Toplevel(ventana)
+            editor.title(f'Proponer corrección · ficha {registro["id_ficha_acceso"]}')
+            editor.geometry('920x610')
+            editor.minsize(750, 500)
+            editor.transient(ventana)
+            editor.grab_set()
+            editor.columnconfigure(0, weight=1)
+            editor.rowconfigure(2, weight=1)
+            ttk.Label(
+                editor,
+                text='Agrega o corrige campos MARC. El cambio no se guarda en MySQL '
+                     'hasta que Aprobación lo autorice.',
+                style='Panel.TLabel', wraplength=850,
+            ).grid(row=0, column=0, sticky='w', padx=14, pady=(12, 8))
+            leader_var = tk.StringVar(value=record.leader)
+            leader_frame = ttk.Frame(editor, padding=(12, 4))
+            leader_frame.grid(row=1, column=0, sticky='ew')
+            ttk.Label(leader_frame, text='LDR (24 caracteres)').pack(side='left', padx=(0, 8))
+            ttk.Entry(leader_frame, textvariable=leader_var, width=35).pack(side='left')
+
+            marco_campos = ttk.Frame(editor, padding=12)
+            marco_campos.grid(row=2, column=0, sticky='nsew')
+            marco_campos.columnconfigure(0, weight=1)
+            marco_campos.rowconfigure(0, weight=1)
+            tabla_edicion = ttk.Treeview(
+                marco_campos,
+                columns=('tag', 'indicadores', 'contenido'),
+                show='headings', style='Lotes.Treeview',
+            )
+            for columna, titulo, ancho in (
+                ('tag', 'Campo', 75), ('indicadores', 'Indicadores', 100),
+                ('contenido', 'Contenido / subcampos', 600),
+            ):
+                tabla_edicion.heading(columna, text=titulo)
+                tabla_edicion.column(
+                    columna, width=ancho, minwidth=70,
+                    stretch=columna == 'contenido', anchor='w',
+                )
+            tabla_edicion.grid(row=0, column=0, sticky='nsew')
+            edicion_scroll = ttk.Scrollbar(
+                marco_campos, orient='vertical', command=tabla_edicion.yview,
+            )
+            edicion_scroll.grid(row=0, column=1, sticky='ns')
+            tabla_edicion.configure(yscrollcommand=edicion_scroll.set)
+
+            formulario = ttk.LabelFrame(
+                editor, text='  Campo seleccionado o nuevo  ', padding=(12, 8),
+            )
+            formulario.grid(row=3, column=0, sticky='ew', padx=12)
+            formulario.columnconfigure(5, weight=1)
+            tag_var = tk.StringVar()
+            indicadores_var = tk.StringVar()
+            contenido_var = tk.StringVar()
+            ttk.Label(formulario, text='Campo').grid(row=0, column=0, padx=(0, 5))
+            ttk.Entry(formulario, textvariable=tag_var, width=7).grid(row=0, column=1)
+            ttk.Label(formulario, text='Indicadores (# = espacio)').grid(row=0, column=2, padx=(12, 5))
+            ttk.Entry(formulario, textvariable=indicadores_var, width=8).grid(row=0, column=3)
+            ttk.Label(formulario, text='Datos / subcampos ($a texto | $b texto)').grid(
+                row=0, column=4, padx=(12, 5),
+            )
+            ttk.Entry(formulario, textvariable=contenido_var).grid(
+                row=0, column=5, sticky='ew',
+            )
+
+            campos_editables = list(record.fields)
+
+            def presentar_campos(seleccionar=None):
+                tabla_edicion.delete(*tabla_edicion.get_children())
+                for indice, campo in enumerate(campos_editables):
+                    if campo.is_control_field():
+                        indicadores, contenido = '', campo.data or ''
+                    else:
+                        indicadores = ''.join(
+                            indicador or '#' for indicador in campo.indicators
+                        )
+                        contenido = ' | '.join(
+                            f'${subcampo.code} {subcampo.value}'
+                            for subcampo in campo.subfields
+                        )
+                    tabla_edicion.insert(
+                        '', 'end', iid=str(indice),
+                        values=(campo.tag, indicadores, contenido),
+                    )
+                if seleccionar is not None and 0 <= seleccionar < len(campos_editables):
+                    tabla_edicion.selection_set(str(seleccionar))
+
+            def limpiar_formulario():
+                tag_var.set('')
+                indicadores_var.set('')
+                contenido_var.set('')
+                tabla_edicion.selection_remove(*tabla_edicion.selection())
+                formulario_estado.config(text='')
+
+            def seleccionar_campo(_evento=None):
+                seleccion = tabla_edicion.selection()
+                if not seleccion:
+                    return
+                campo = campos_editables[int(seleccion[0])]
+                tag_var.set(campo.tag)
+                if campo.is_control_field():
+                    indicadores_var.set('')
+                    contenido_var.set(campo.data or '')
+                else:
+                    indicadores_var.set(''.join(
+                        indicador or '#' for indicador in campo.indicators
+                    ))
+                    contenido_var.set(' | '.join(
+                        f'${subcampo.code} {subcampo.value}'
+                        for subcampo in campo.subfields
+                    ))
+                formulario_estado.config(
+                    text='Edita los valores y pulsa «Actualizar campo».',
+                )
+
+            def campo_validado():
+                return campo_desde_editor(
+                    tag_var.get(), indicadores_var.get(), contenido_var.get(),
+                )
+
+            def agregar_campo():
+                try:
+                    campo = campo_validado()
+                    campos_editables.append(campo)
+                except ValueError as exc:
+                    messagebox.showerror('Campo no válido', str(exc), parent=editor)
+                    return
+                presentar_campos(len(campos_editables) - 1)
+
+            def actualizar_campo():
+                seleccion = tabla_edicion.selection()
+                if not seleccion:
+                    messagebox.showwarning(
+                        'Selecciona un campo', 'Selecciona un campo MARC para actualizar.',
+                        parent=editor,
+                    )
+                    return
+                try:
+                    campo = campo_validado()
+                except ValueError as exc:
+                    messagebox.showerror('Campo no válido', str(exc), parent=editor)
+                    return
+                indice = int(seleccion[0])
+                campos_editables[indice] = campo
+                presentar_campos(indice)
+
+            def eliminar_campo():
+                seleccion = tabla_edicion.selection()
+                if not seleccion:
+                    messagebox.showwarning(
+                        'Selecciona un campo', 'Selecciona el campo que deseas quitar.',
+                        parent=editor,
+                    )
+                    return
+                indice = int(seleccion[0])
+                del campos_editables[indice]
+                presentar_campos()
+                limpiar_formulario()
+
+            tabla_edicion.bind('<<TreeviewSelect>>', seleccionar_campo)
+            acciones_campo = ttk.Frame(editor, padding=(12, 8))
+            acciones_campo.grid(row=4, column=0, sticky='ew')
+            ttk.Button(
+                acciones_campo, text='Agregar campo', command=agregar_campo,
+            ).pack(side='left', padx=(0, 6))
+            ttk.Button(
+                acciones_campo, text='Actualizar campo', command=actualizar_campo,
+            ).pack(side='left', padx=(0, 6))
+            ttk.Button(
+                acciones_campo, text='Eliminar campo', command=eliminar_campo,
+            ).pack(side='left')
+            formulario_estado = ttk.Label(
+                acciones_campo, style='Panel.TLabel',
+            )
+            formulario_estado.pack(side='left', padx=10)
+
+            def enviar_propuesta():
+                propuesta = Record(force_utf8=True)
+                propuesta.leader = leader_var.get()
+                propuesta.fields = list(campos_editables)
+                try:
+                    marcxml, iso2709 = serializar_registro(propuesta)
+                    propuesta_id = self.proponer(
+                        lote.id, registro['id_ficha_acceso'], marcxml, iso2709,
+                        registro['huella_revision'],
+                    )
+                except Exception as exc:
+                    messagebox.showerror(
+                        'No se pudo proponer la corrección', str(exc), parent=editor,
+                    )
+                    return
+                editor.destroy()
+                messagebox.showinfo(
+                    'Corrección pendiente',
+                    f'La propuesta #{propuesta_id} quedó pendiente de revisión '
+                    'por un usuario con perfil Aprobación. No se modificó aún el registro.',
+                    parent=ventana,
+                )
+                cargar_pagina(inicio_pagina)
+
+            barra_editor = ttk.Frame(editor, padding=(12, 6, 12, 12))
+            barra_editor.grid(row=5, column=0, sticky='ew')
+            ttk.Button(
+                barra_editor, text='Cancelar', command=editor.destroy,
+            ).pack(side='right')
+            ttk.Button(
+                barra_editor, text='Enviar a aprobación',
+                style='Primary.TButton', command=enviar_propuesta,
+            ).pack(side='right', padx=(0, 8))
+            presentar_campos()
+
+        def revisar_propuestas():
+            if not self.politica(lote, self.demo.get()).get('aprobar_correccion'):
+                return
+            try:
+                propuestas = self.listar_propuestas(lote.id)
+            except Exception as exc:
+                messagebox.showerror(
+                    'No se pudieron consultar las propuestas', str(exc),
+                    parent=ventana,
+                )
+                return
+            if not propuestas:
+                messagebox.showinfo(
+                    'Sin propuestas pendientes',
+                    'Este lote no tiene correcciones pendientes de aprobación.',
+                    parent=ventana,
+                )
+                return
+
+            revision = tk.Toplevel(ventana)
+            revision.title(f'Correcciones pendientes · {lote.id}')
+            revision.geometry('1180x690')
+            revision.minsize(900, 520)
+            revision.transient(ventana)
+            revision.columnconfigure(0, weight=1)
+            revision.rowconfigure(1, weight=1)
+            ttk.Label(
+                revision,
+                text='Compara la versión actual con la propuesta antes de resolverla.',
+                style='Panel.TLabel',
+            ).grid(row=0, column=0, sticky='w', padx=14, pady=10)
+            propuesta_tabla = ttk.Treeview(
+                revision, columns=('ficha', 'usuario', 'fecha'),
+                show='headings', height=5, style='Lotes.Treeview',
+            )
+            for columna, titulo, ancho in (
+                ('ficha', 'Ficha', 100), ('usuario', 'Propuesta por', 150),
+                ('fecha', 'Fecha', 180),
+            ):
+                propuesta_tabla.heading(columna, text=titulo)
+                propuesta_tabla.column(columna, width=ancho, anchor='w')
+            propuesta_tabla.grid(row=1, column=0, sticky='new', padx=14)
+            for propuesta in propuestas:
+                propuesta_tabla.insert(
+                    '', 'end', iid=str(propuesta['id']),
+                    values=(
+                        propuesta['id_ficha_acceso'], propuesta['propuesto_por'],
+                        str(propuesta['fecha_creacion']),
+                    ),
+                )
+            comparacion = ttk.Panedwindow(revision, orient='horizontal')
+            comparacion.grid(row=2, column=0, sticky='nsew', padx=14, pady=10)
+            revision.rowconfigure(2, weight=1)
+            vistas_comparacion = []
+            for titulo in ('Versión actual', 'Versión propuesta'):
+                bloque = ttk.Frame(comparacion, padding=8, style='Tarjeta.TFrame')
+                bloque.columnconfigure(0, weight=1)
+                bloque.rowconfigure(1, weight=1)
+                ttk.Label(bloque, text=titulo, style='Nombre.TLabel').grid(
+                    row=0, column=0, sticky='w', pady=(0, 6),
+                )
+                tabla = ttk.Treeview(
+                    bloque, columns=('tag', 'ind', 'contenido'),
+                    show='headings', style='Lotes.Treeview',
+                )
+                for columna, texto, ancho in (
+                    ('tag', 'Campo', 65), ('ind', 'Ind.', 60),
+                    ('contenido', 'Subcampos', 380),
+                ):
+                    tabla.heading(columna, text=texto)
+                    tabla.column(columna, width=ancho, anchor='w',
+                                  stretch=columna == 'contenido')
+                tabla.grid(row=1, column=0, sticky='nsew')
+                scroll = ttk.Scrollbar(
+                    bloque, orient='vertical', command=tabla.yview,
+                )
+                scroll.grid(row=1, column=1, sticky='ns')
+                tabla.configure(yscrollcommand=scroll.set)
+                comparacion.add(bloque, weight=1)
+                vistas_comparacion.append(tabla)
+
+            estado_propuesta = ttk.Label(revision, style='Panel.TLabel')
+            estado_propuesta.grid(row=3, column=0, sticky='ew', padx=14)
+
+            def pintar_propuesta(_evento=None):
+                seleccion = propuesta_tabla.selection()
+                if not seleccion:
+                    return
+                propuesta = next(
+                    (item for item in propuestas
+                     if str(item['id']) == seleccion[0]),
+                    None,
+                )
+                if propuesta is None:
+                    return
+                versiones = (
+                    {
+                        'marca_marcxml': propuesta['marca_marcxml_actual'],
+                        'marca_iso2709': propuesta['marca_iso2709_actual'],
+                    },
+                    {
+                        'marca_marcxml': propuesta['marca_marcxml_propuesta'],
+                        'marca_iso2709': propuesta['marca_iso2709_propuesta'],
+                    },
+                )
+                try:
+                    campos_versiones = [
+                        campos_para_revision(version)[0] for version in versiones
+                    ]
+                except ValueError as exc:
+                    messagebox.showerror(
+                        'Propuesta inválida', str(exc), parent=revision,
+                    )
+                    return
+                for tabla, campos in zip(vistas_comparacion, campos_versiones):
+                    tabla.delete(*tabla.get_children())
+                    for campo in campos:
+                        tabla.insert(
+                            '', 'end',
+                            values=(
+                                campo['etiqueta'], campo['indicadores'],
+                                campo['contenido'],
+                            ),
+                        )
+                estado_propuesta.config(
+                    text=f'Propuesta #{propuesta["id"]} · ficha '
+                         f'{propuesta["id_ficha_acceso"]} · autor: '
+                         f'{propuesta["propuesto_por"]}. Al aprobar se actualizará '
+                         'MARCXML, ISO2709 y el estado del registro.',
+                )
+
+            def resolver_seleccion(aprobar):
+                seleccion = propuesta_tabla.selection()
+                if not seleccion:
+                    messagebox.showwarning(
+                        'Selecciona una propuesta',
+                        'Selecciona la corrección que deseas revisar.',
+                        parent=revision,
+                    )
+                    return
+                propuesta_id = int(seleccion[0])
+                if not messagebox.askyesno(
+                    'Confirmar decisión',
+                    '¿Aprobar y aplicar esta corrección en MySQL?'
+                    if aprobar else '¿Rechazar esta propuesta de corrección?',
+                    parent=revision,
+                ):
+                    return
+                try:
+                    self.resolver_propuesta(lote.id, propuesta_id, aprobar)
+                except Exception as exc:
+                    messagebox.showerror(
+                        'No se pudo resolver la corrección', str(exc),
+                        parent=revision,
+                    )
+                    return
+                revision.destroy()
+                self.actualizar(seleccionar=lote.id)
+                cargar_pagina(inicio_pagina)
+
+            propuesta_tabla.bind('<<TreeviewSelect>>', pintar_propuesta)
+            botonera = ttk.Frame(revision, padding=12)
+            botonera.grid(row=4, column=0, sticky='ew')
+            ttk.Button(
+                botonera, text='Cerrar', command=revision.destroy,
+            ).pack(side='right')
+            ttk.Button(
+                botonera, text='Rechazar', command=lambda: resolver_seleccion(False),
+            ).pack(side='right', padx=(0, 8))
+            ttk.Button(
+                botonera, text='Aprobar y aplicar',
+                style='Primary.TButton',
+                command=lambda: resolver_seleccion(True),
+            ).pack(side='right', padx=(0, 8))
+            propuesta_tabla.selection_set(str(propuestas[0]['id']))
+            pintar_propuesta()
 
         def cargar_pagina(inicio):
             nonlocal inicio_pagina, registros_actuales
@@ -993,13 +1653,37 @@ class PanelLotes(ttk.Frame):
             command=lambda: cargar_pagina(max(0, inicio_pagina - tamano_pagina)),
         )
         boton_anterior.grid(row=0, column=0)
+        politica_revision = self.politica(lote, self.demo.get())
+        boton_observaciones = ttk.Button(
+            barra, text='Observaciones',
+            command=registrar_observacion,
+            state='disabled',
+        )
+        boton_observaciones.grid(row=0, column=2, padx=(0, 6))
+        boton_reparar = ttk.Button(
+            barra, text='Proponer reparación XML',
+            command=proponer_reparacion_xml, state='disabled',
+        )
+        boton_reparar.grid(row=0, column=3, padx=(0, 6))
+        boton_editar = ttk.Button(
+            barra, text='Corregir / proponer',
+            command=editar_registro,
+            state='normal' if politica_revision.get('proponer_correccion') else 'disabled',
+        )
+        boton_editar.grid(row=0, column=4, padx=(0, 6))
+        boton_propuestas = ttk.Button(
+            barra, text='Revisar propuestas',
+            command=revisar_propuestas,
+            state='normal' if politica_revision.get('aprobar_correccion') else 'disabled',
+        )
+        boton_propuestas.grid(row=0, column=5, padx=(0, 6))
         boton_siguiente = ttk.Button(
             barra, text='Siguiente →',
             command=lambda: cargar_pagina(inicio_pagina + tamano_pagina),
         )
-        boton_siguiente.grid(row=0, column=2)
+        boton_siguiente.grid(row=0, column=6)
         ttk.Button(barra, text='Cerrar', command=ventana.destroy).grid(
-            row=0, column=3, padx=(8, 0),
+            row=0, column=7, padx=(8, 0),
         )
         cargar_pagina(0)
 
@@ -1007,6 +1691,11 @@ class PanelLotes(ttk.Frame):
         lote = self.lote_actual()
         if self.politica(lote, self.demo.get())['detener']:
             self.detener(lote.id)
+
+    def _reprocesar(self):
+        lote = self.lote_actual()
+        if lote and self.politica(lote, self.demo.get()).get('reprocesar'):
+            self.reprocesar(lote.id)
 
     def _ventana_texto(self, titulo, contenido):
         ventana = tk.Toplevel(self)

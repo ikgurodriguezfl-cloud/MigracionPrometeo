@@ -7,11 +7,25 @@ class AccesoDenegado(Exception):
     pass
 
 MATRIZ_PERMISOS = {
-    "validar_access": ["Ejecucion", "Administracion"],
-    "iniciar_conversion": ["Ejecucion", "Administracion"],
-    "revision_muestra": ["Revision", "Administracion"],
-    "aprobar_exportacion": ["Aprobacion", "Administracion"]
+    "iniciar_nueva_migracion": ["Ejecucion", "Aprobacion", "Administracion"],
+    "validar_access": ["Ejecucion", "Aprobacion", "Administracion"],
+    "validar_mysql": ["Ejecucion", "Aprobacion", "Administracion"],
+    "editar_configuracion": ["Ejecucion", "Aprobacion", "Administracion"],
+    "iniciar_conversion": ["Ejecucion", "Aprobacion", "Administracion"],
+    "detener_conversion": ["Ejecucion", "Aprobacion", "Administracion"],
+    "reprocesar_lote": ["Ejecucion", "Aprobacion", "Administracion"],
+    "revision_muestra": ["Revision", "Aprobacion", "Administracion"],
+    "registrar_observacion": ["Revision", "Aprobacion", "Administracion"],
+    "proponer_correccion": ["Revision", "Aprobacion", "Administracion"],
+    "aprobar_correccion": ["Aprobacion", "Administracion"],
+    "rechazar_correccion": ["Aprobacion", "Administracion"],
+    "aprobar_exportacion": ["Aprobacion", "Administracion"],
+    "exportar_historial": ["Ejecucion", "Revision", "Aprobacion", "Administracion"],
+    "ver_incidencias": ["Ejecucion", "Revision", "Aprobacion", "Administracion"],
+    "ver_actividad": ["Ejecucion", "Aprobacion", "Administracion"],
+    "gestionar_usuarios": ["Administracion"],
 }
+
 
 def requerir_permiso(perfil_actual: str, operacion: str):
     permitidos = MATRIZ_PERMISOS.get(operacion, [])
@@ -22,3 +36,7 @@ def requerir_permiso(perfil_actual: str, operacion: str):
         
     logging.info(f"Seguridad: Operación '{operacion}' concedida al perfil '{perfil_actual}'.")
     return True
+
+
+def tiene_permiso(perfil_actual: str, operacion: str) -> bool:
+    return perfil_actual in MATRIZ_PERMISOS.get(operacion, [])
