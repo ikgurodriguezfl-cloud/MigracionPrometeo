@@ -20,7 +20,7 @@ class LoginScreen:
         self.auth_service = auth_service
         self.on_login_success = on_login_success
 
-        self.root.title('Iniciar sesión')
+        self.root.title('NexoMARC | Iniciar sesión')
         self.root.geometry('940x620')
         self.root.minsize(780, 560)
         self.root.resizable(True, True)
@@ -37,7 +37,7 @@ class LoginScreen:
         marca = tk.Frame(contenedor, bg=GUINDA, padx=48, pady=46)
         marca.grid(row=0, column=0, sticky='nsew')
         tk.Label(
-            marca, text='PROMETEO', bg=GUINDA, fg=BLANCO,
+            marca, text='NexoMARC', bg=GUINDA, fg=BLANCO,
             font=('Segoe UI', 12, 'bold'),
         ).pack(anchor='w')
 
@@ -83,7 +83,7 @@ class LoginScreen:
         self.form_frame = tk.Frame(formulario, bg=BLANCO)
         self.form_frame.pack(fill='x')
         tk.Label(
-            acceso, text='Migración PROMETEO - MARC21',
+            acceso, text='Migración Access · MARC21 · Koha',
             bg=BLANCO, fg=TEXTO_MUTED, font=('Segoe UI', 9),
         ).place(relx=0.5, rely=0.94, anchor='center')
 

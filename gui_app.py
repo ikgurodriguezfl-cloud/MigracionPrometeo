@@ -54,7 +54,10 @@ class MigracionApp:
         # Obtención del perfil para la matriz de permisos
         self.perfil_usuario = self.auth_service.get_profile(self.session_token) if self.auth_service else "Ejecucion"
         
-        self.root.title(f'Prometeo Migrator - Access a MARC21 (Koha) | Perfil: {self.perfil_usuario}')
+        self.root.title(
+            f'NexoMARC | Migración Access a MARC21 (Koha) · '
+            f'Perfil: {self.perfil_usuario}'
+        )
         ancho = min(1260, self.root.winfo_screenwidth() - 80)
         alto = min(820, self.root.winfo_screenheight() - 100)
         self.root.geometry(f'{ancho}x{alto}')
@@ -121,17 +124,17 @@ class MigracionApp:
         marca = tk.Frame(sidebar, bg=self.COLORES['barra_lateral'])
         marca.pack(fill='x', padx=18, pady=(24, 34))
         tk.Label(
-            marca, text='P', width=2, height=1, bg='#ffffff',
+            marca, text='N', width=2, height=1, bg='#ffffff',
             fg=self.COLORES['guinda'], font=('Segoe UI', 17, 'bold'),
         ).pack(side='left', padx=(0, 10), ipady=3)
         identidad = tk.Frame(marca, bg=self.COLORES['barra_lateral'])
         identidad.pack(side='left')
         tk.Label(
-            identidad, text='PROMETEO', bg=self.COLORES['barra_lateral'],
+            identidad, text='NexoMARC', bg=self.COLORES['barra_lateral'],
             fg='#ffffff', font=('Segoe UI', 11, 'bold'),
         ).pack(anchor='w')
         tk.Label(
-            identidad, text='MIGRATOR', bg=self.COLORES['barra_lateral'],
+            identidad, text='MIGRADOR', bg=self.COLORES['barra_lateral'],
             fg=self.COLORES['barra_lateral_muted'], font=('Segoe UI', 8, 'bold'),
         ).pack(anchor='w', pady=(2, 0))
 
@@ -1054,7 +1057,7 @@ class MigracionApp:
         encabezado.grid(row=0, column=0, sticky='ew')
         encabezado.columnconfigure(1, weight=1)
         tk.Label(
-            encabezado, text='P', width=2, height=1,
+            encabezado, text='N', width=2, height=1,
             bg='#ffffff', fg=self.COLORES['guinda'],
             font=('Segoe UI', 18, 'bold'),
         ).grid(row=0, column=0, rowspan=2, sticky='w', padx=(0, 14), ipady=3)

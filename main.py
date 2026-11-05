@@ -1,4 +1,4 @@
-"""Punto de entrada de la aplicacion Prometeo Migrator."""
+"""Punto de entrada de la aplicación NexoMARC."""
 import os
 import sys
 
@@ -23,7 +23,7 @@ def main():
         for widget in root.winfo_children():
             widget.destroy()
 
-        root.title('Prometeo Migrator - Inicio de sesion')
+        root.title('NexoMARC | Inicio de sesión')
         try:
             LoginScreen(root, auth_service=auth_service, on_login_success=ir_a_principal)
         except TypeError as error:
@@ -39,7 +39,7 @@ def main():
             widget.destroy()
 
         # Ajustar titulo y tamanio para la pantalla principal
-        root.title('Prometeo Migrator - Access a MARC21 (Koha)')
+        root.title('NexoMARC | Migración Access a MARC21 (Koha)')
         root.geometry('900x650')
         root.minsize(800, 600)
         root.resizable(True, True)

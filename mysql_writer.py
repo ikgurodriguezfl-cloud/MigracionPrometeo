@@ -349,13 +349,15 @@ class MySQLWriter:
                     'Revisa la base de datos antes de continuar.'
                 )
             cur.execute(
-                'SELECT id_ficha_acceso, num_adqui, biblioteca, branch_koha, '
-                'volumen, ejemplar, tomo, accesible, fecha_ingreso, signatura '
-                'FROM ejemplares_marc '
-                f'WHERE id_ficha_acceso IN ({marcadores}) '
-                'ORDER BY id_ficha_acceso, id',
-                tuple(fichas),
-            )
+                    'SELECT r.id_ficha_acceso, e.num_adqui, e.biblioteca, '
+                    'e.branch_koha, e.volumen, e.ejemplar, e.tomo, e.accesible, '
+                    'e.fecha_ingreso, e.signatura '
+                    'FROM ejemplares_marc e '
+                    'JOIN registros_marc r ON r.id = e.id_registro_marc '
+                    f'WHERE r.id_ficha_acceso IN ({marcadores}) '
+                    'ORDER BY r.id_ficha_acceso, e.id',
+                    tuple(fichas),
+                )
             ejemplares = cur.fetchall()
 
         por_ficha = {ficha: [] for ficha in fichas}

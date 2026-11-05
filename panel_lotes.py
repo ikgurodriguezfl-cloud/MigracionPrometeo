@@ -212,6 +212,50 @@ def campos_para_revision(registro):
         )
 
 
+def ejemplares_desde_registro_marc(registro):
+    try:
+        record = record_desde_iso2709(registro.get('marca_iso2709'))
+    except ValueError as error_iso:
+        try:
+            registros = parse_xml_to_array(
+                StringIO(registro.get('marca_marcxml') or ''), strict=True,
+            )
+        except (ValueError, TypeError, UnicodeError, SAXException) as error_xml:
+            raise ValueError(
+                f'No se pudieron leer ejemplares desde MARCXML ni ISO2709: '
+                f'{error_xml}; {error_iso}'
+            ) from error_xml
+        if len(registros) != 1:
+            raise ValueError(
+                'El MARCXML no contiene exactamente un registro para recuperar ejemplares.'
+            )
+        record = registros[0]
+
+    def primer_subcampo(campo, codigo):
+        valores = campo.get_subfields(codigo)
+        return valores[0] if valores else None
+
+    resultado = []
+    for campo in record.get_fields('952'):
+        homebranch = primer_subcampo(campo, 'a')
+        holdingbranch = primer_subcampo(campo, 'b')
+        sucursal = ' / '.join(
+            valor for valor in (homebranch, holdingbranch) if valor
+        )
+        resultado.append({
+            'num_adqui': primer_subcampo(campo, 'p') or '—',
+            'biblioteca': '—',
+            'branch_koha': sucursal or '—',
+            'volumen': primer_subcampo(campo, 'c') or '—',
+            'ejemplar': '—',
+            'tomo': '—',
+            'accesible': primer_subcampo(campo, 'z') or '—',
+            'fecha_ingreso': '—',
+            'signatura': primer_subcampo(campo, 'o') or '—',
+        })
+    return resultado
+
+
 def record_desde_iso2709(contenido):
     if not contenido:
         raise ValueError('El registro no contiene MARC ISO2709 para editar.')
@@ -925,7 +969,9 @@ class PanelLotes(ttk.Frame):
         vistas_detalle.add(marco_xml, text='MARCXML')
         for marco in (marco_campos, marco_ejemplares, marco_xml):
             marco.columnconfigure(0, weight=1)
-            marco.rowconfigure(0, weight=1)
+        marco_campos.rowconfigure(0, weight=1)
+        marco_ejemplares.rowconfigure(1, weight=1)
+        marco_xml.rowconfigure(0, weight=1)
 
         tabla_campos = ttk.Treeview(
             marco_campos, columns=('etiqueta', 'indicadores', 'contenido'),
@@ -962,22 +1008,31 @@ class PanelLotes(ttk.Frame):
             marco_ejemplares, columns=columnas_ejemplar,
             show='headings', style='Lotes.Treeview',
         )
+        lbl_estado_ejemplares = ttk.Label(
+            marco_ejemplares, text='', style='Panel.TLabel', wraplength=700,
+        )
+        lbl_estado_ejemplares.grid(
+            row=0, column=0, columnspan=2, sticky='w', pady=(0, 7),
+        )
         titulos_ejemplar = (
             'Núm. adquisición', 'Biblioteca', 'Sucursal Koha', 'Volumen',
             'Ejemplar', 'Tomo', 'Accesible', 'Fecha ingreso', 'Signatura',
         )
         for columna, titulo in zip(columnas_ejemplar, titulos_ejemplar):
             tabla_ejemplares.heading(columna, text=titulo)
-            tabla_ejemplares.column(columna, width=115, minwidth=75, anchor='w')
-        tabla_ejemplares.grid(row=0, column=0, sticky='nsew')
+            tabla_ejemplares.column(
+                columna, width=105, minwidth=75, anchor='w',
+                stretch=columna in ('codigo', 'sucursal', 'signatura'),
+            )
+        tabla_ejemplares.grid(row=1, column=0, sticky='nsew')
         scroll_ejemplares = ttk.Scrollbar(
             marco_ejemplares, orient='vertical', command=tabla_ejemplares.yview,
         )
-        scroll_ejemplares.grid(row=0, column=1, sticky='ns')
+        scroll_ejemplares.grid(row=1, column=1, sticky='ns')
         scroll_ejemplares_x = ttk.Scrollbar(
             marco_ejemplares, orient='horizontal', command=tabla_ejemplares.xview,
         )
-        scroll_ejemplares_x.grid(row=1, column=0, sticky='ew')
+        scroll_ejemplares_x.grid(row=2, column=0, sticky='ew')
         tabla_ejemplares.configure(
             yscrollcommand=scroll_ejemplares.set,
             xscrollcommand=scroll_ejemplares_x.set,
@@ -1037,6 +1092,7 @@ class PanelLotes(ttk.Frame):
             )
             tabla_campos.delete(*tabla_campos.get_children())
             tabla_ejemplares.delete(*tabla_ejemplares.get_children())
+            lbl_estado_ejemplares.config(text='')
             texto_xml.configure(state='normal')
             texto_xml.delete('1.0', tk.END)
             texto_xml.configure(state='disabled')
@@ -1059,7 +1115,35 @@ class PanelLotes(ttk.Frame):
                     '', 'end',
                     values=(campo['etiqueta'], campo['indicadores'], campo['contenido']),
                 )
-            for ejemplar in registro.get('ejemplares', []):
+            ejemplares = registro.get('ejemplares', [])
+            recuperados_marc = False
+            if not ejemplares:
+                try:
+                    ejemplares = ejemplares_desde_registro_marc(registro)
+                    recuperados_marc = bool(ejemplares)
+                except ValueError as exc:
+                    lbl_estado_ejemplares.config(
+                        text=f'No se pudieron consultar ejemplares: {exc}',
+                        foreground='#a36d23',
+                    )
+            if recuperados_marc:
+                lbl_estado_ejemplares.config(
+                    text='No hay filas guardadas en la tabla de ejemplares. '
+                         'Se muestran los datos disponibles del campo MARC 952; '
+                         'los datos originales de Access no se pueden recuperar desde aquí.',
+                    foreground='#a36d23',
+                )
+            elif ejemplares:
+                lbl_estado_ejemplares.config(
+                    text=f'{len(ejemplares):,} ejemplar(es) recuperado(s) de MySQL.',
+                    foreground='#686168',
+                )
+            elif not lbl_estado_ejemplares.cget('text'):
+                lbl_estado_ejemplares.config(
+                    text='No hay ejemplares guardados ni campos MARC 952 para esta ficha.',
+                    foreground='#686168',
+                )
+            for ejemplar in ejemplares:
                 tabla_ejemplares.insert(
                     '', 'end',
                     values=tuple(
@@ -1222,8 +1306,8 @@ class PanelLotes(ttk.Frame):
 
             editor = tk.Toplevel(ventana)
             editor.title(f'Proponer corrección · ficha {registro["id_ficha_acceso"]}')
-            editor.geometry('920x610')
-            editor.minsize(750, 500)
+            editor.geometry('1120x700')
+            editor.minsize(900, 600)
             editor.transient(ventana)
             editor.grab_set()
             editor.columnconfigure(0, weight=1)
@@ -1250,12 +1334,12 @@ class PanelLotes(ttk.Frame):
                 show='headings', style='Lotes.Treeview',
             )
             for columna, titulo, ancho in (
-                ('tag', 'Campo', 75), ('indicadores', 'Indicadores', 100),
-                ('contenido', 'Contenido / subcampos', 600),
+                ('tag', 'Campo', 85), ('indicadores', 'Indicadores', 95),
+                ('contenido', 'Contenido / subcampos', 820),
             ):
                 tabla_edicion.heading(columna, text=titulo)
                 tabla_edicion.column(
-                    columna, width=ancho, minwidth=70,
+                    columna, width=ancho, minwidth=75,
                     stretch=columna == 'contenido', anchor='w',
                 )
             tabla_edicion.grid(row=0, column=0, sticky='nsew')
@@ -1263,25 +1347,44 @@ class PanelLotes(ttk.Frame):
                 marco_campos, orient='vertical', command=tabla_edicion.yview,
             )
             edicion_scroll.grid(row=0, column=1, sticky='ns')
-            tabla_edicion.configure(yscrollcommand=edicion_scroll.set)
+            edicion_scroll_x = ttk.Scrollbar(
+                marco_campos, orient='horizontal', command=tabla_edicion.xview,
+            )
+            edicion_scroll_x.grid(row=1, column=0, sticky='ew')
+            tabla_edicion.configure(
+                yscrollcommand=edicion_scroll.set,
+                xscrollcommand=edicion_scroll_x.set,
+            )
 
             formulario = ttk.LabelFrame(
                 editor, text='  Campo seleccionado o nuevo  ', padding=(12, 8),
             )
             formulario.grid(row=3, column=0, sticky='ew', padx=12)
-            formulario.columnconfigure(5, weight=1)
+            formulario.columnconfigure(3, weight=1)
             tag_var = tk.StringVar()
             indicadores_var = tk.StringVar()
-            contenido_var = tk.StringVar()
-            ttk.Label(formulario, text='Campo').grid(row=0, column=0, padx=(0, 5))
-            ttk.Entry(formulario, textvariable=tag_var, width=7).grid(row=0, column=1)
-            ttk.Label(formulario, text='Indicadores (# = espacio)').grid(row=0, column=2, padx=(12, 5))
-            ttk.Entry(formulario, textvariable=indicadores_var, width=8).grid(row=0, column=3)
-            ttk.Label(formulario, text='Datos / subcampos ($a texto | $b texto)').grid(
-                row=0, column=4, padx=(12, 5),
+            ttk.Label(formulario, text='Campo').grid(row=0, column=0, padx=(0, 5), sticky='w')
+            ttk.Entry(formulario, textvariable=tag_var, width=8).grid(row=1, column=0, sticky='w')
+            ttk.Label(
+                formulario, text='Indicadores (# = espacio)',
+            ).grid(row=0, column=1, padx=(12, 5), sticky='w')
+            ttk.Entry(
+                formulario, textvariable=indicadores_var, width=10,
+            ).grid(row=1, column=1, sticky='w')
+            ttk.Label(
+                formulario, text='Contenido / subcampos ($a texto | $b texto)',
+            ).grid(
+                row=0, column=2, columnspan=2, padx=(12, 5), sticky='w',
             )
-            ttk.Entry(formulario, textvariable=contenido_var).grid(
-                row=0, column=5, sticky='ew',
+            contenido_editor = tk.Text(
+                formulario, height=3, wrap='word',
+                font=('Consolas', 10), background='#fbfaf9',
+                foreground='#302a31', insertbackground='#6d0c2e',
+                relief='solid', bd=1, padx=7, pady=5,
+            )
+            contenido_editor.grid(
+                row=1, column=2, columnspan=2, sticky='ew',
+                padx=(12, 0), pady=(2, 0),
             )
 
             campos_editables = list(record.fields)
@@ -1309,7 +1412,7 @@ class PanelLotes(ttk.Frame):
             def limpiar_formulario():
                 tag_var.set('')
                 indicadores_var.set('')
-                contenido_var.set('')
+                contenido_editor.delete('1.0', tk.END)
                 tabla_edicion.selection_remove(*tabla_edicion.selection())
                 formulario_estado.config(text='')
 
@@ -1321,22 +1424,26 @@ class PanelLotes(ttk.Frame):
                 tag_var.set(campo.tag)
                 if campo.is_control_field():
                     indicadores_var.set('')
-                    contenido_var.set(campo.data or '')
+                    contenido_editor.delete('1.0', tk.END)
+                    contenido_editor.insert('1.0', campo.data or '')
                 else:
                     indicadores_var.set(''.join(
                         indicador or '#' for indicador in campo.indicators
                     ))
-                    contenido_var.set(' | '.join(
+                    contenido = ' | '.join(
                         f'${subcampo.code} {subcampo.value}'
                         for subcampo in campo.subfields
-                    ))
+                    )
+                    contenido_editor.delete('1.0', tk.END)
+                    contenido_editor.insert('1.0', contenido)
                 formulario_estado.config(
                     text='Edita los valores y pulsa «Actualizar campo».',
                 )
 
             def campo_validado():
                 return campo_desde_editor(
-                    tag_var.get(), indicadores_var.get(), contenido_var.get(),
+                    tag_var.get(), indicadores_var.get(),
+                    contenido_editor.get('1.0', 'end-1c'),
                 )
 
             def agregar_campo():

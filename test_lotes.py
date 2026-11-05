@@ -12,7 +12,8 @@ from mysql_writer import MySQLWriter
 from pymarc import Field, Record, Subfield
 from panel_lotes import (
     campos_desde_marcxml, campos_desde_iso2709, campos_para_revision,
-    datos_grafico, filtrar_lotes, record_para_edicion, resumir_lotes,
+    datos_grafico, ejemplares_desde_registro_marc, filtrar_lotes,
+    record_para_edicion, resumir_lotes,
 )
 
 
@@ -243,6 +244,30 @@ class LotesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'MARC ISO2709'):
             campos_desde_iso2709(b'invalid')
 
+    def test_revision_recupera_ejemplares_desde_campos_952_si_tabla_vacia(self):
+        record = Record(force_utf8=True)
+        record.add_field(Field(
+            tag='952', indicators=[' ', ' '],
+            subfields=[
+                Subfield('a', 'ITT'), Subfield('b', 'ITT'),
+                Subfield('p', 'BAR-351'), Subfield('c', 'V2 T1'),
+                Subfield('z', 'available'), Subfield('o', 'QA76'),
+            ],
+        ))
+
+        ejemplares = ejemplares_desde_registro_marc({
+            'marca_iso2709': record.as_marc(),
+            'marca_marcxml': '',
+        })
+
+        self.assertEqual(len(ejemplares), 1)
+        self.assertEqual(ejemplares[0]['num_adqui'], 'BAR-351')
+        self.assertEqual(ejemplares[0]['branch_koha'], 'ITT / ITT')
+        self.assertEqual(ejemplares[0]['volumen'], 'V2 T1')
+        self.assertEqual(ejemplares[0]['accesible'], 'available')
+        self.assertEqual(ejemplares[0]['signatura'], 'QA76')
+        self.assertEqual(ejemplares[0]['biblioteca'], '—')
+
     def test_consulta_revision_devuelve_registros_y_ejemplares_por_ficha(self):
         cursor = MagicMock()
         cursor.fetchall.side_effect = [
@@ -264,6 +289,10 @@ class LotesTests(unittest.TestCase):
         self.assertEqual(registros[1]['ejemplares'][0]['num_adqui'], 'BAR-15')
         self.assertEqual(cursor.execute.call_args_list[0].args[1], (12, 15))
         self.assertEqual(cursor.execute.call_args_list[1].args[1], (12, 15))
+        self.assertIn(
+            'JOIN registros_marc r ON r.id = e.id_registro_marc',
+            cursor.execute.call_args_list[1].args[0],
+        )
 
     def test_consulta_revision_avisa_si_falta_un_registro_del_lote(self):
         cursor = MagicMock()
