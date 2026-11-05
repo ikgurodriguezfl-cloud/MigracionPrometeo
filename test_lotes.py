@@ -1,11 +1,18 @@
 """Pruebas del seguimiento del sprint 2; no conectan Access, MySQL ni Koha."""
 import json
+from datetime import date
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from lotes import HistorialLotes, acciones_lote, lotes_de_ejemplo
+from mysql_writer import MySQLWriter
+from pymarc import Field, Record, Subfield
+from panel_lotes import (
+    campos_desde_marcxml, campos_desde_iso2709, campos_para_revision,
+    datos_grafico, filtrar_lotes, resumir_lotes,
+)
 
 
 class LotesTests(unittest.TestCase):
@@ -79,11 +86,160 @@ class LotesTests(unittest.TestCase):
             acciones = acciones_lote(lote, fuente_validada=True, destino_coincide=True)
             self.assertEqual(acciones['iniciar'], lote.estado == 'en_espera')
             self.assertEqual(acciones['exportar'], lote.estado == 'concluido')
+            self.assertEqual(acciones['revision'], bool(lote.correctos))
             self.assertEqual(acciones['resumen'], lote.estado in ('concluido', 'con_incidencias'))
             for bloqueos in ({'ocupado': True}, {'demostracion': True}):
                 acciones = acciones_lote(lote, fuente_validada=True, destino_coincide=True, **bloqueos)
                 self.assertFalse(acciones['iniciar']); self.assertFalse(acciones['exportar'])
+                self.assertFalse(acciones['revision'])
         self.assertEqual(self.historial.listar(), [])
+
+    def test_resumen_agrega_metricas_y_estados_sin_modificar_lotes(self):
+        ejemplos = lotes_de_ejemplo()
+
+        resumen = resumir_lotes(ejemplos)
+
+        self.assertEqual(resumen['total_lotes'], 4)
+        self.assertEqual(resumen['fichas_correctas'], 224)
+        self.assertEqual(resumen['ejemplares'], 0)
+        self.assertEqual(resumen['requieren_revision'], 1)
+        self.assertEqual(resumen['por_estado'], {
+            'en_espera': 1,
+            'en_proceso': 1,
+            'concluido': 1,
+            'con_incidencias': 1,
+            'detenido': 0,
+        })
+        self.assertEqual(self.historial.listar(), [])
+
+    def test_filtros_de_fecha_estado_y_ordenamiento(self):
+        ejemplos = lotes_de_ejemplo()
+        fechas = (
+            '2026-11-04T09:00:00-07:00',
+            '2026-10-30T09:00:00-07:00',
+            '2026-10-01T09:00:00-07:00',
+            '2025-12-31T09:00:00-07:00',
+        )
+        for lote, fecha in zip(ejemplos, fechas):
+            lote.creado_en = fecha
+
+        semana = filtrar_lotes(
+            ejemplos, periodo='Últimos 7 días', hoy=date(2026, 11, 4),
+        )
+        revision = filtrar_lotes(
+            ejemplos, estado='Con incidencias', hoy=date(2026, 11, 4),
+        )
+        mayor_error = filtrar_lotes(ejemplos, orden='Más errores')
+        mas_antiguos = filtrar_lotes(ejemplos, orden='Más antiguos')
+
+        self.assertEqual([lote.id for lote in semana], [ejemplos[0].id, ejemplos[1].id])
+        self.assertEqual([lote.id for lote in revision], [ejemplos[3].id])
+        self.assertEqual(mayor_error[0].errores, 10)
+        self.assertEqual(mas_antiguos[0].creado_en, fechas[3])
+        with self.assertRaises(ValueError):
+            filtrar_lotes(ejemplos, periodo='Fecha inválida')
+
+    def test_graficos_muestran_resultados_comparables_y_limite_por_lote(self):
+        ejemplos = lotes_de_ejemplo()
+        resumen = resumir_lotes(ejemplos)
+
+        _, etiquetas, resultados, colores = datos_grafico(
+            ejemplos, resumen, 'Resultado de fichas',
+        )
+        self.assertEqual(etiquetas, ['Correctas', 'Omitidas', 'Con error', 'Pendientes'])
+        self.assertEqual(resultados, [224, 21, 10, 145])
+        self.assertEqual(len(colores), len(resultados))
+
+        titulo, etiquetas, cantidades, colores = datos_grafico(
+            ejemplos, resumen, 'Fichas correctas por lote',
+        )
+        self.assertEqual(titulo, 'Fichas correctas por lote')
+        self.assertEqual(cantidades, [90, 80, 54, 0])
+        self.assertEqual(len(etiquetas), len(colores))
+        with self.assertRaises(ValueError):
+            datos_grafico(ejemplos, resumen, 'Gráfico desconocido')
+
+    def test_parser_marcxml_separa_campos_indicadores_y_subcampos(self):
+        xml = (
+            '<record xmlns="http://www.loc.gov/MARC21/slim">'
+            '<leader>00000nam a2200000 i 4500</leader>'
+            '<controlfield tag="001">123</controlfield>'
+            '<datafield tag="245" ind1="1" ind2="0">'
+            '<subfield code="a">Título</subfield>'
+            '<subfield code="b">subtítulo</subfield>'
+            '</datafield></record>'
+        )
+
+        campos = campos_desde_marcxml(xml)
+
+        self.assertEqual(campos[0]['etiqueta'], 'LDR')
+        self.assertEqual(campos[1]['contenido'], '123')
+        self.assertEqual(campos[2]['etiqueta'], '245')
+        self.assertEqual(campos[2]['indicadores'], '10')
+        self.assertEqual(campos[2]['contenido'], '$a Título  |  $b subtítulo')
+        with self.assertRaises(ValueError):
+            campos_desde_marcxml('<record><broken></record>')
+        with self.assertRaises(ValueError):
+            campos_desde_marcxml('<collection />')
+
+    def test_revision_recupera_campos_de_iso2709_si_el_xml_es_invalido(self):
+        registro = Record(force_utf8=True)
+        registro.leader = '00000nam a2200000 i 4500'
+        registro.add_field(Field(tag='001', data='123'))
+        registro.add_field(Field(
+            tag='245', indicators=['1', '0'],
+            subfields=[Subfield('a', 'Título')],
+        ))
+        iso2709 = registro.as_marc()
+
+        campos = campos_desde_iso2709(iso2709)
+        campos_recuperados, aviso = campos_para_revision({
+            'marca_marcxml': '<record><incompleto></record>',
+            'marca_iso2709': iso2709,
+        })
+
+        self.assertEqual(campos[1]['contenido'], '123')
+        self.assertEqual(campos[2]['etiqueta'], '245')
+        self.assertEqual(campos[2]['indicadores'], '10')
+        self.assertEqual(campos[2]['contenido'], '$a Título')
+        self.assertEqual(campos_recuperados, campos)
+        self.assertIn('ISO2709', aviso)
+        with self.assertRaisesRegex(ValueError, 'MARC ISO2709'):
+            campos_desde_iso2709(b'invalid')
+
+    def test_consulta_revision_devuelve_registros_y_ejemplares_por_ficha(self):
+        cursor = MagicMock()
+        cursor.fetchall.side_effect = [
+            [
+                {'id_ficha_acceso': 12, 'marca_marcxml': '<record />',
+                 'marca_iso2709': b'marc12'},
+                {'id_ficha_acceso': 15, 'marca_marcxml': '<record />',
+                 'marca_iso2709': b'marc15'},
+            ],
+            [{'id_ficha_acceso': 15, 'num_adqui': 'BAR-15'}],
+        ]
+        writer = MySQLWriter({})
+        writer._conn = MagicMock()
+        writer.conn.cursor.return_value.__enter__.return_value = cursor
+
+        registros = writer.obtener_registros_revision([12, 15])
+
+        self.assertEqual(registros[0]['ejemplares'], [])
+        self.assertEqual(registros[1]['ejemplares'][0]['num_adqui'], 'BAR-15')
+        self.assertEqual(cursor.execute.call_args_list[0].args[1], (12, 15))
+        self.assertEqual(cursor.execute.call_args_list[1].args[1], (12, 15))
+
+    def test_consulta_revision_avisa_si_falta_un_registro_del_lote(self):
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        writer = MySQLWriter({})
+        writer._conn = MagicMock()
+        writer.conn.cursor.return_value.__enter__.return_value = cursor
+
+        with self.assertRaisesRegex(ValueError, 'no contiene todos los registros'):
+            writer.obtener_registros_revision([12])
+        with self.assertRaises(ValueError):
+            writer.obtener_registros_revision([True])
 
     def test_no_exporta_omitidos_como_nuevos_registros(self):
         lote = self.historial.recibir('copia.mdb', 10)

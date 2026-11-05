@@ -172,6 +172,85 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.assertEqual(parametros, (1, 3))
         self.assertEqual(len(ElementTree.parse(ruta).getroot()), 2)
 
+    def test_revision_consulta_solo_fichas_correctas_y_exige_permiso(self):
+        lote = self.historial.actualizar(
+            self.lote.id, estado='concluido', etapa='finalizado',
+            total_objetivo=3, correctos=2, omitidos=1,
+            fichas_correctas=[1, 3],
+        )
+        self.app.perfil_usuario = 'Revision'
+        self.app.migracion_en_curso = False
+        self.app._lote_actual_id = lote.id
+        self.app.entry_host = Mock()
+        self.app.entry_user = Mock()
+        self.app.entry_user.get.return_value = 'revisor'
+        self.app.entry_pass = Mock()
+        self.app.entry_pass.get.return_value = 'CLAVE_PRIVADA'
+        self.app._destino_actual = Mock(return_value=lote.destino)
+        registros = [{'id_ficha_acceso': 3, 'marca_marcxml': '<record />'}]
+        self.escritor.obtener_registros_revision.return_value = registros
+
+        with patch('gui_app.MySQLWriter', return_value=self.escritor) as crear_writer:
+            resultado = self.app._obtener_registros_revision(lote.id, 1, 1)
+
+        self.assertEqual(resultado, registros)
+        self.escritor.obtener_registros_revision.assert_called_once_with([3])
+        crear_writer.assert_called_once()
+        self.assertEqual(
+            crear_writer.call_args.args[0]['password'], 'CLAVE_PRIVADA',
+        )
+        self.escritor.close.assert_called_once()
+
+        self.app.perfil_usuario = 'Ejecucion'
+        with patch('gui_app.MySQLWriter') as crear_writer:
+            with self.assertRaises(PermissionError):
+                self.app._obtener_registros_revision(lote.id, 0, 1)
+        crear_writer.assert_not_called()
+
+    def test_revision_no_expone_contrasena_si_falla_mysql(self):
+        lote = self.historial.actualizar(
+            self.lote.id, estado='concluido', etapa='finalizado',
+            total_objetivo=3, correctos=2, omitidos=1,
+            fichas_correctas=[1, 3],
+        )
+        self.app.perfil_usuario = 'Revision'
+        self.app.migracion_en_curso = False
+        self.app._lote_actual_id = lote.id
+        self.app.entry_host = Mock()
+        self.app.entry_user = Mock()
+        self.app.entry_user.get.return_value = 'revisor'
+        self.app.entry_pass = Mock()
+        self.app.entry_pass.get.return_value = 'CLAVE_PRIVADA'
+        self.app._destino_actual = Mock(return_value=lote.destino)
+        self.escritor.obtener_registros_revision.side_effect = RuntimeError(
+            'Error CLAVE_PRIVADA',
+        )
+
+        with patch('gui_app.MySQLWriter', return_value=self.escritor):
+            with self.assertRaisesRegex(RuntimeError, r'Error \*{3}') as error:
+                self.app._obtener_registros_revision(lote.id, 0, 1)
+
+        self.assertNotIn('CLAVE_PRIVADA', str(error.exception))
+        self.escritor.close.assert_called_once()
+
+    def test_accion_de_revision_respeta_perfiles_autorizados(self):
+        lote = self.historial.actualizar(
+            self.lote.id, estado='concluido', etapa='finalizado',
+            total_objetivo=3, correctos=2, omitidos=1,
+            fichas_correctas=[1, 3],
+        )
+        self.app.migracion_en_curso = False
+        self.app._lote_actual_id = lote.id
+        self.app.entry_host = Mock()
+        self.app._destino_actual = Mock(return_value=lote.destino)
+
+        self.app.perfil_usuario = 'Ejecucion'
+        self.assertFalse(self.app._politica_lote(lote)['revision'])
+        self.app.perfil_usuario = 'Revision'
+        self.assertTrue(self.app._politica_lote(lote)['revision'])
+        self.app.perfil_usuario = 'Administracion'
+        self.assertTrue(self.app._politica_lote(lote)['revision'])
+
     def test_perfiles_sin_permiso_no_llegan_al_motor_ni_al_exportador(self):
         for perfil, operacion in (
             ('Revision', self.app._probar_access),
@@ -201,12 +280,24 @@ class InterfazSprint2Tests(unittest.TestCase):
                 self.assertIs(app.pagina_actual, app.panel_lotes)
                 self.assertEqual(app.panel_lotes.winfo_manager(), 'grid')
                 panel = app.panel_lotes
+                self.assertEqual(
+                    [panel.vistas.tab(tab, 'text') for tab in panel.vistas.tabs()],
+                    ['Resumen', 'Historial', 'Análisis'],
+                )
                 panel.demo.set(True); panel._cambiar_modo()
                 self.assertEqual(len(panel.tabla.get_children()), 4)
+                for tipo in (
+                    'Estado de los lotes', 'Resultado de fichas',
+                    'Fichas correctas por lote', 'Ejemplares por lote',
+                ):
+                    panel.tipo_grafico.set(tipo)
+                    panel._pintar_grafico()
+                    self.assertGreater(len(panel.grafico.find_all()), 0)
                 for lote in panel.lotes:
                     panel.seleccionado = lote.id; panel._pintar_detalle()
                     self.assertIn('disabled', panel.btn_iniciar.state())
                     self.assertIn('disabled', panel.btn_exportar.state())
+                    self.assertIn('disabled', panel.btn_revisar.state())
                     self.assertIn('disabled', panel.btn_detener.state())
                     self.assertEqual('disabled' not in panel.btn_resumen.state(), lote.estado in ('concluido', 'con_incidencias'))
                 panel.filtro.set('En espera'); panel._pintar_tabla()

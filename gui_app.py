@@ -15,7 +15,7 @@ from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
 from lotes import HistorialLotes, acciones_lote
 from panel_lotes import PanelLotes
-from permissions import requerir_permiso, AccesoDenegado
+from permissions import requerir_permiso, AccesoDenegado, MATRIZ_PERMISOS
 
 
 class _DetencionSolicitada(Exception):
@@ -152,6 +152,7 @@ class MigracionApp:
         self.panel_lotes = PanelLotes(
             self.page_container, listar=self.historial_lotes.listar, politica=self._politica_lote,
             iniciar=self._iniciar_desde_panel, exportar=self._exportar_marcxml,
+            revisar=self._obtener_registros_revision,
             conexiones=lambda: self._navegar(self.frame_conexion),
             detener=self._solicitar_detencion,
         )
@@ -814,6 +815,10 @@ class MigracionApp:
         politica = acciones_lote(lote, ocupado=self.migracion_en_curso, fuente_validada=validado,
                                  destino_coincide=bool(lote and lote.destino == destino), demostracion=demostracion,
                                  lote_activo_id=self._lote_actual_id, detencion_solicitada=self._detencion_solicitada.is_set())
+        politica['revision'] = bool(
+            politica['revision']
+            and self.perfil_usuario in MATRIZ_PERMISOS['revision_muestra']
+        )
         if self.historial_lotes.solo_lectura:
             politica['iniciar'] = False
         return politica
@@ -1452,3 +1457,48 @@ class MigracionApp:
         finally:
             if writer:
                 writer.close()
+
+    def _obtener_registros_revision(self, lote_id, inicio, cantidad):
+        if not self._sesion_valida():
+            raise PermissionError('La sesión ya no es válida. Inicia sesión nuevamente.')
+        try:
+            requerir_permiso(self.perfil_usuario, 'revision_muestra')
+        except AccesoDenegado as exc:
+            raise PermissionError(str(exc)) from exc
+
+        lote = self.historial_lotes.obtener(lote_id)
+        if lote is None:
+            raise ValueError('No se encontró el lote seleccionado.')
+        if not self._politica_lote(lote)['revision']:
+            raise ValueError(
+                'La revisión requiere registros migrados y que el destino MySQL '
+                'coincida con el usado por este lote.'
+            )
+        if (type(inicio) is not int or type(cantidad) is not int
+                or inicio < 0 or cantidad < 1 or cantidad > 100):
+            raise ValueError('El rango de registros solicitado no es válido.')
+
+        config = {
+            **self._destino_actual(),
+            'user': self.entry_user.get(),
+            'password': self.entry_pass.get(),
+            'charset': 'utf8mb4',
+        }
+        writer = MySQLWriter(config)
+        try:
+            writer.connect()
+            fichas = lote.fichas_correctas[inicio:inicio + cantidad]
+            registros = writer.obtener_registros_revision(fichas)
+            self.historial_lotes.actualizar(
+                lote.id,
+                evento=f'Se consultaron {len(registros)} registros migrados para revisión.',
+            )
+            return registros
+        except Exception as exc:
+            mensaje = str(exc)
+            password = config.get('password')
+            if password:
+                mensaje = mensaje.replace(password, '***')
+            raise RuntimeError(mensaje) from exc
+        finally:
+            writer.close()

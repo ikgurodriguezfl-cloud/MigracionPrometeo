@@ -168,3 +168,44 @@ class MySQLWriter:
             'total_ejemplares': total_ejemplares,
             'por_estado': por_estado,
         }
+
+    def obtener_registros_revision(self, fichas):
+        if not fichas:
+            return []
+        if len(fichas) > 100:
+            raise ValueError('La consulta de revisión no puede superar 100 fichas.')
+        if any(type(ficha) is not int or ficha < 0 for ficha in fichas):
+            raise ValueError('La lista de fichas para revisión no es válida.')
+
+        marcadores = ','.join(['%s'] * len(fichas))
+        with self.conn.cursor() as cur:
+            cur.execute(
+                'SELECT id_ficha_acceso, id_control, marca_marcxml, '
+                'marca_iso2709, estado, '
+                'fecha_creacion, fecha_actualizacion FROM registros_marc '
+                f'WHERE id_ficha_acceso IN ({marcadores}) '
+                'ORDER BY id_ficha_acceso',
+                tuple(fichas),
+            )
+            registros = cur.fetchall()
+            if len(registros) != len(set(fichas)):
+                raise ValueError(
+                    'El destino no contiene todos los registros del grupo solicitado. '
+                    'Revisa la base de datos antes de continuar.'
+                )
+            cur.execute(
+                'SELECT id_ficha_acceso, num_adqui, biblioteca, branch_koha, '
+                'volumen, ejemplar, tomo, accesible, fecha_ingreso, signatura '
+                'FROM ejemplares_marc '
+                f'WHERE id_ficha_acceso IN ({marcadores}) '
+                'ORDER BY id_ficha_acceso, id',
+                tuple(fichas),
+            )
+            ejemplares = cur.fetchall()
+
+        por_ficha = {ficha: [] for ficha in fichas}
+        for ejemplar in ejemplares:
+            por_ficha[ejemplar['id_ficha_acceso']].append(ejemplar)
+        for registro in registros:
+            registro['ejemplares'] = por_ficha[registro['id_ficha_acceso']]
+        return registros

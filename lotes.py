@@ -125,6 +125,7 @@ def acciones_lote(lote, ocupado=False, fuente_validada=False, destino_coincide=F
         'iniciar': bool(real and not ocupado and fuente_validada and lote.estado == 'en_espera'),
         'resumen': bool(lote and lote.estado in ('concluido', 'con_incidencias', 'detenido')),
         'incidencias': bool(lote and (lote.errores or lote.incidencias)),
+        'revision': bool(real and not ocupado and destino_coincide and lote.correctos),
         'exportar': bool(real and not ocupado and destino_coincide and lote.estado == 'concluido' and lote.correctos),
         'detener': bool(activo and not detencion_solicitada),
         'detencion_solicitada': bool(activo and detencion_solicitada),
