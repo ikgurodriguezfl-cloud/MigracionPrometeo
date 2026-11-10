@@ -106,6 +106,7 @@ class MySQLWriter:
                     id_ejemplar VARCHAR(100)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
+            # La tabla conserva propuesta y decisión sin sobrescribir el original.
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS correcciones_marc (
                     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -124,6 +125,7 @@ class MySQLWriter:
                     INDEX idx_ficha_estado (id_ficha_acceso, estado)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
+            # El índice agiliza la consulta del historial por lote y ficha.
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS observaciones_revision (
                     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -273,6 +275,7 @@ class MySQLWriter:
         texto = observacion.strip()
         self.conn.begin()
         try:
+            # La nota y su evento de auditoría se confirman juntos.
             with self.conn.cursor() as cur:
                 cur.execute(
                     'INSERT INTO observaciones_revision '
@@ -343,6 +346,7 @@ class MySQLWriter:
                 tuple(fichas),
             )
             registros = cur.fetchall()
+            # Evita mostrar una revisión parcial si faltan fichas en MySQL.
             if len(registros) != len(set(fichas)):
                 raise ValueError(
                     'El destino no contiene todos los registros del grupo solicitado. '
@@ -429,6 +433,7 @@ class MySQLWriter:
         self.conn.begin()
         try:
             with self.conn.cursor() as cur:
+                # Bloqueo y huella detectan cambios concurrentes al proponer.
                 cur.execute(
                     'SELECT marca_marcxml, marca_iso2709 FROM registros_marc '
                     'WHERE id_ficha_acceso = %s FOR UPDATE',
@@ -513,6 +518,7 @@ class MySQLWriter:
                         'La persona que propuso la corrección no puede aprobarla ni rechazarla.'
                     )
                 if aprobar:
+                    # Antes de aplicar, se valida el formato y que el original siga intacto.
                     registro_propuesto = self._validar_registro_propuesto(
                         propuesta['marca_marcxml_propuesta'],
                         bytes(propuesta['marca_iso2709_propuesta']),

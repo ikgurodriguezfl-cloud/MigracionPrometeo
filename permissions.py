@@ -14,6 +14,7 @@ MATRIZ_PERMISOS = {
     "iniciar_conversion": ["Ejecucion", "Aprobacion", "Administracion"],
     "detener_conversion": ["Ejecucion", "Aprobacion", "Administracion"],
     "reprocesar_lote": ["Ejecucion", "Aprobacion", "Administracion"],
+    # Revision puede consultar, observar y proponer; solo Aprobacion resuelve propuestas.
     "revision_muestra": ["Revision", "Aprobacion", "Administracion"],
     "registrar_observacion": ["Revision", "Aprobacion", "Administracion"],
     "proponer_correccion": ["Revision", "Aprobacion", "Administracion"],

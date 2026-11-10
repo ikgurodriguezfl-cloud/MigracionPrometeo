@@ -1782,6 +1782,7 @@ class MigracionApp:
         writer = MySQLWriter(config)
         try:
             writer.connect()
+            # El lote define qué fichas correctas pueden revisarse.
             fichas = lote.fichas_correctas[inicio:inicio + cantidad]
             registros = writer.obtener_registros_revision(fichas)
             self.historial_lotes.actualizar(
@@ -1835,6 +1836,7 @@ class MigracionApp:
     def _proponer_correccion(self, lote_id, id_ficha, marcxml, iso2709,
                              huella_original):
         lote = self._validar_lote_revision(lote_id, 'proponer_correccion')
+        # La ficha debe pertenecer al lote; su huella detecta vistas desactualizadas.
         if type(id_ficha) is not int or id_ficha not in lote.fichas_correctas:
             raise ValueError('La ficha no pertenece a los registros correctos de este lote.')
         writer = self._writer_revision()
@@ -1904,6 +1906,7 @@ class MigracionApp:
             writer.close()
 
     def _validar_ficha_observacion(self, lote, id_ficha):
+        # Vincula cada nota al conjunto de fichas correctas registrado para el lote.
         if type(id_ficha) is not int or id_ficha not in lote.fichas_correctas:
             raise ValueError('La ficha no pertenece a los registros correctos de este lote.')
 

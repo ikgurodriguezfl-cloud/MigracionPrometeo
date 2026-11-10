@@ -199,6 +199,7 @@ def campos_para_revision(registro):
     try:
         return campos_desde_marcxml(registro['marca_marcxml']), ''
     except ValueError as error_xml:
+        # ISO2709 permite revisar el registro aunque la copia MARCXML esté dañada.
         try:
             campos = campos_desde_iso2709(registro.get('marca_iso2709'))
         except ValueError as error_iso:
@@ -896,6 +897,7 @@ class PanelLotes(ttk.Frame):
         lote = self.lote_actual()
         if not lote or not self.politica(lote, self.demo.get())['revision']:
             return
+        # La paginación evita consultar todo el lote de una vez.
         tamano_pagina = 50
         try:
             registros = self.revisar(lote.id, 0, tamano_pagina)
@@ -1119,6 +1121,7 @@ class PanelLotes(ttk.Frame):
             recuperados_marc = False
             if not ejemplares:
                 try:
+                    # MARC 952 es respaldo; no contiene todos los datos tabulares.
                     ejemplares = ejemplares_desde_registro_marc(registro)
                     recuperados_marc = bool(ejemplares)
                 except ValueError as exc:
@@ -1203,6 +1206,7 @@ class PanelLotes(ttk.Frame):
 
             def cargar_observaciones():
                 try:
+                    # El historial queda acotado a la ficha y al lote abiertos.
                     observaciones = self.listar_observaciones(
                         lote.id, registro['id_ficha_acceso'],
                     )
@@ -1270,6 +1274,7 @@ class PanelLotes(ttk.Frame):
                     lote, self.demo.get()).get('proponer_correccion')):
                 return
             try:
+                # La reparación desde ISO2709 queda pendiente de aprobación.
                 record = record_desde_iso2709(registro.get('marca_iso2709'))
                 marcxml, iso2709 = serializar_registro(record)
                 propuesta_id = self.proponer(

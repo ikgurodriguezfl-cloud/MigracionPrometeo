@@ -55,10 +55,6 @@ class LoginScreen:
             bg=GUINDA, fg='#e8dce1', justify='left', anchor='w',
             font=('Segoe UI', 11), pady=18,
         ).pack(anchor='w')
-        tk.Label(
-            marca, text='GESTIÓN BIBLIOGRÁFICA     ·     KOHA',
-            bg=GUINDA, fg='#e4cbd4', font=('Segoe UI', 8, 'bold'),
-        ).pack(side='bottom', anchor='w')
 
         acceso = tk.Frame(contenedor, bg=BLANCO)
         acceso.grid(row=0, column=1, sticky='nsew')
