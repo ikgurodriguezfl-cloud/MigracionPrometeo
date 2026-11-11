@@ -34,7 +34,7 @@ class MarcMappingTests(unittest.TestCase):
 
         record = self.converter.ficha_a_record(ficha, ejemplares)
 
-        self.assertEqual(self.converter.mapping_version, '2.0')
+        self.assertEqual(self.converter.mapping_version, '2.1')
         self.assertEqual(record.leader, '00000cam a2200000 a 4500')
         self.assertEqual(record['001'].data, '21')
         self.assertEqual(record['005'].data, '20210708091011.0')
@@ -127,6 +127,17 @@ class MarcMappingTests(unittest.TestCase):
         self.assertEqual(json.loads(record['887']['a'])['EtiquetasMARC'], original)
         self.assertEqual(record['260']['a'], 'Lugar desconocido')
         self.assertTrue(any(i['referencia'] == '777' for i in incidencias))
+
+    def test_publicacion_con_dos_fechas_e_isbn_dudoso(self):
+        origen = '¦020968-429-032-4¦245Prueba¦260MEXICO :ALIANZA,1988, 1990.'
+        incidencias = []
+        record = self.converter.ficha_a_record(
+            dict(Ficha_No=1867, EtiquetasMARC=origen), [], incidencias=incidencias,
+        )
+        self.assertEqual(record['260']['b'], 'ALIANZA,')
+        self.assertEqual(record['260']['c'], '1988, 1990.')
+        self.assertEqual(record['020']['a'], '968-429-032-4')
+        self.assertTrue(any(aviso['referencia'] == '020$a' for aviso in incidencias))
 
     def test_datos_fijos_cortos_e_idioma_explicito(self):
         ficha = dict(Ficha_No=1, DatosFijos='051028s1975^^^^mx^^^^^r^^^^^^^^^0^',

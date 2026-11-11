@@ -1,6 +1,7 @@
 """Escritura de registros MARC21 y ejemplares a MySQL."""
 from hashlib import sha256
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime
 from io import BytesIO, StringIO
 import pymysql
@@ -12,6 +13,7 @@ class MySQLWriter:
     def __init__(self, config: Dict):
         self.config = config
         self._conn = None
+        self._en_transaccion_ficha = False
 
     def connect(self):
         self._conn = pymysql.connect(
@@ -23,6 +25,9 @@ class MySQLWriter:
             charset=self.config.get('charset', 'utf8mb4'),
             cursorclass=pymysql.cursors.DictCursor,
             autocommit=False,
+            connect_timeout=8,
+            read_timeout=30,
+            write_timeout=30,
         )
         return self._conn
 
@@ -40,6 +45,7 @@ class MySQLWriter:
     def ensure_database(self):
         """Crea la base de datos si no existe."""
         db_name = self.config.get('database', 'prometeo_marc')
+        identificador = db_name.replace('`', '``')
         tmp = pymysql.connect(
             host=self.config.get('host', 'localhost'),
             port=int(self.config.get('port', 3306)),
@@ -47,11 +53,16 @@ class MySQLWriter:
             password=self.config.get('password', ''),
             charset=self.config.get('charset', 'utf8mb4'),
             autocommit=True,
+            connect_timeout=8,
+            read_timeout=30,
+            write_timeout=30,
         )
-        with tmp.cursor() as cur:
-            cur.execute(f"CREATE DATABASE IF NOT EXISTS `{db_name}` "
-                        f"CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-        tmp.close()
+        try:
+            with tmp.cursor() as cur:
+                cur.execute(f"CREATE DATABASE IF NOT EXISTS `{identificador}` "
+                            "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+        finally:
+            tmp.close()
 
     def test_connection(self) -> bool:
         try:
@@ -154,6 +165,23 @@ class MySQLWriter:
             cur.execute('SELECT id FROM registros_marc WHERE id_ficha_acceso = %s', (id_ficha,))
             return cur.fetchone() is not None
 
+    @contextmanager
+    def transaccion_ficha(self):
+        """Confirma la ficha junto con todos sus ejemplares."""
+        conexion = self.conn
+        self._en_transaccion_ficha = True
+        try:
+            yield
+            conexion.commit()
+        except Exception:
+            try:
+                conexion.rollback()
+            except pymysql.Error:
+                pass  # Una conexión perdida revierte la transacción en el servidor.
+            raise
+        finally:
+            self._en_transaccion_ficha = False
+
     def insertar_registro_marc(self, id_ficha: int, id_control: str,
                                marcxml: str, iso2709: bytes) -> int:
         with self.conn.cursor() as cur:
@@ -163,7 +191,8 @@ class MySQLWriter:
                 'VALUES (%s, %s, %s, %s, %s)',
                 (id_ficha, id_control, marcxml, iso2709, 'NUEVO'),
             )
-            self.conn.commit()
+            if not self._en_transaccion_ficha:
+                self.conn.commit()
             return cur.lastrowid
 
     def insertar_ejemplar(self, id_registro_marc: int, id_ficha: int,
@@ -178,18 +207,11 @@ class MySQLWriter:
                 (
                     id_registro_marc,
                     id_ficha,
-                    ejemplar.get('NumAdqui'),
-                    str(ejemplar.get('Biblioteca', '')) if ejemplar.get('Biblioteca') is not None else '',
-                    branch_koha,
-                    int(ejemplar['Volumen']) if ejemplar.get('Volumen') is not None else None,
-                    int(ejemplar['Ejemplar']) if ejemplar.get('Ejemplar') is not None else None,
-                    int(ejemplar['Tomo']) if ejemplar.get('Tomo') is not None else None,
-                    int(ejemplar['Accesible']) if ejemplar.get('Accesible') is not None else None,
-                    ejemplar.get('FechaIngreso').date() if ejemplar.get('FechaIngreso') else None,
-                    signatura,
+                    *self._valores_ejemplar(ejemplar, branch_koha, signatura),
                 ),
             )
-        self.conn.commit()
+        if not self._en_transaccion_ficha:
+            self.conn.commit()
 
     @staticmethod
     def _valores_ejemplar(ejemplar, branch_koha, signatura):

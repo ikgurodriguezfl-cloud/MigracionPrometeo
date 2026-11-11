@@ -1,7 +1,9 @@
 """Prueba el enlace del proceso real al panel con conexiones sustituidas."""
 from pathlib import Path
+from contextlib import nullcontext
 from queue import Queue
 from threading import Event
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -35,8 +37,11 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.lector = Mock()
         self.lector.contar_fichas.return_value = 3
         self.lector.leer_fichas.return_value = [{'Ficha_No': 1}, {'Ficha_No': 2}, {'Ficha_No': 3}]
+        self.lector.iterar_bloques.side_effect = lambda limite: iter([self.lector.leer_fichas(limite=limite)])
+        self.lector.codigos_adquisicion_repetidos.return_value = set()
         self.lector.leer_ejemplares_por_ficha.return_value = {}
         self.escritor = Mock()
+        self.escritor.transaccion_ficha.side_effect = nullcontext
         self.escritor.registrar_existe.return_value = False
 
     def ejecutar(self):
@@ -50,6 +55,8 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.assertEqual(lote.estado, 'concluido')
         self.assertEqual((lote.correctos, lote.omitidos, lote.errores, lote.progreso), (2, 1, 0, 100))
         self.assertEqual(lote.fichas_correctas, [1, 3])
+        self.assertEqual([(f['id'], f['estado']) for f in lote.resultados],
+                         [(1, 'Convertida'), (2, 'Omitida'), (3, 'Convertida')])
         self.assertGreater(self.app._eventos_ui.qsize(), 0)
         self.lector.close.assert_called_once(); self.escritor.close.assert_called_once()
 
@@ -460,8 +467,15 @@ class InterfazSprint2Tests(unittest.TestCase):
                 app._validar_archivo_access = Mock(return_value=[])
                 lector = Mock(); lector.contar_fichas.return_value = 3
                 app._detencion_solicitada.set()
-                with patch('gui_app.AccessReader', return_value=lector), patch('gui_app.threading.Thread'):
+                def hilo_en_prueba(target, args, daemon):
+                    return SimpleNamespace(start=lambda: target(*args))
+
+                with patch('gui_app.AccessReader', return_value=lector), \
+                        patch('gui_app.threading.Thread', side_effect=hilo_en_prueba), \
+                        patch.object(app, '_ejecutar_migracion'):
                     app._iniciar_migracion()
+                funcion, args = app._eventos_ui.get_nowait()
+                funcion(*args)
                 self.assertFalse(app._detencion_solicitada.is_set())
                 lote = app.historial_lotes.obtener(app._lote_actual_id)
                 self.assertEqual(lote.version_mapeo, app.marc_converter.mapping_version)
@@ -479,8 +493,12 @@ class InterfazSprint2Tests(unittest.TestCase):
                 self.assertIn('disabled', app.btn_detener.state())
                 self.assertIn('disabled', app.panel_lotes.btn_exportar.state())
                 self.assertNotIn('disabled', app.panel_lotes.btn_resumen.state())
-                with patch('gui_app.AccessReader', return_value=lector), patch('gui_app.threading.Thread'):
+                with patch('gui_app.AccessReader', return_value=lector), \
+                        patch('gui_app.threading.Thread', side_effect=hilo_en_prueba), \
+                        patch.object(app, '_ejecutar_migracion'):
                     app._iniciar_migracion()
+                funcion, args = app._eventos_ui.get_nowait()
+                funcion(*args)
                 self.assertFalse(app._detencion_solicitada.is_set())
                 self.assertNotIn('disabled', app.btn_detener.state())
                 app.btn_detener.invoke()

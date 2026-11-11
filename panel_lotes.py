@@ -5,7 +5,10 @@ import csv
 from io import BytesIO, StringIO
 import json
 import os
+from pathlib import Path
 import re
+from tempfile import NamedTemporaryFile
+from threading import Thread
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from xml.sax import SAXException
@@ -15,6 +18,64 @@ from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
 
 from lotes import ESTADOS, ETAPAS, lotes_de_ejemplo
+
+
+def _celda_csv(valor):
+    if isinstance(valor, str) and valor.lstrip().startswith(('=', '+', '-', '@')):
+        return "'" + valor
+    return valor
+
+
+def escribir_reporte_lote(ruta, lote, demostracion=False):
+    """Exporta el resumen y las referencias disponibles del lote seleccionado."""
+    ruta = Path(ruta)
+    filas = lote.resultados
+    traza_completa = filas is not None
+    if filas is None:
+        filas = [
+            {'id': ficha, 'referencia': f'Ficha {ficha}', 'estado': 'Convertida',
+             'titulo': '', 'motivos': []}
+            for ficha in lote.fichas_correctas
+        ]
+    temporal = None
+    try:
+        es_csv = ruta.suffix.lower() == '.csv'
+        with NamedTemporaryFile('w', encoding='utf-8-sig' if es_csv else 'utf-8',
+                                newline='', dir=ruta.parent, delete=False) as archivo:
+            temporal = archivo.name
+            if es_csv:
+                metadatos = {
+                    'lote': lote.id, 'origen': os.path.basename(lote.fuente),
+                    'lote_anterior': lote.lote_origen, 'usuario': lote.usuario or 'Sin registrar',
+                    'fecha_ejecucion': lote.iniciado_en, 'creado_en': lote.creado_en,
+                    'actualizado_en': lote.actualizado_en, 'estado_lote': ESTADOS[lote.estado],
+                    'version_mapeo': lote.version_mapeo,
+                    'recibidos': lote.total_recibidos, 'objetivo': lote.total_objetivo,
+                    'convertidas': lote.correctos, 'omitidas': lote.omitidos,
+                    'rechazadas': lote.errores, 'pendientes': lote.pendientes,
+                    'fuera_del_alcance': lote.total_recibidos - lote.total_objetivo,
+                    'ejemplares': lote.ejemplares, 'trazabilidad_completa': 'Sí' if traza_completa else 'No',
+                    'demostracion': 'Sí' if demostracion else 'No',
+                }
+                columnas = ('ficha_access', 'referencia', 'estado_ficha', 'titulo', 'motivos')
+                escritor = csv.writer(archivo)
+                escritor.writerow((*metadatos, *columnas))
+                datos_lote = [_celda_csv(valor) for valor in metadatos.values()]
+                for fila in filas or [None]:
+                    valores = (fila['id'], fila['referencia'], fila['estado'],
+                               fila['titulo'], ' | '.join(fila['motivos'])) if fila else ('',) * len(columnas)
+                    escritor.writerow((*datos_lote, *map(_celda_csv, valores)))
+            else:
+                json.dump({
+                    'demostracion': demostracion, 'lote': asdict(lote),
+                    'procesados': lote.procesados, 'pendientes': lote.pendientes,
+                    'fuera_del_alcance': lote.total_recibidos - lote.total_objetivo,
+                    'progreso': lote.progreso, 'trazabilidad_completa': traza_completa,
+                }, archivo, ensure_ascii=False, indent=2)
+        os.replace(temporal, ruta)
+    finally:
+        if temporal and os.path.exists(temporal):
+            os.unlink(temporal)
 
 
 def resumir_lotes(lotes):
@@ -344,9 +405,11 @@ class PanelLotes(ttk.Frame):
     def __init__(self, parent, listar, politica, iniciar, exportar, revisar,
                  proponer, listar_propuestas, resolver_propuesta,
                  listar_observaciones, registrar_observacion,
-                 conexiones, detener, reprocesar):
+                 conexiones, detener, reprocesar, obtener, publicar):
         super().__init__(parent, padding=16, style='Panel.TFrame')
         self.listar = listar
+        self.obtener = obtener
+        self.publicar = publicar
         self.politica = politica
         self.iniciar = iniciar
         self.exportar = exportar
@@ -571,42 +634,47 @@ class PanelLotes(ttk.Frame):
         self.nombre.grid(row=1, column=0, sticky='ew', pady=(4, 8))
         self.estado = ttk.Label(detalle, style='Estado.TLabel')
         self.estado.grid(row=2, column=0, sticky='ew')
-        self.etapa = ttk.Label(detalle, style='Tarjeta.TLabel')
+        self.etapa = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=345)
         self.etapa.grid(row=3, column=0, sticky='ew', pady=(4, 8))
         self.barra = ttk.Progressbar(detalle, maximum=100, style='Lotes.Horizontal.TProgressbar')
         self.barra.grid(row=4, column=0, sticky='ew')
         self.conteos = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=350)
-        self.conteos.grid(row=5, column=0, sticky='ew', pady=(7, 10))
+        self.conteos.grid(row=5, column=0, sticky='ew', pady=(7, 6))
+        metricas = ttk.Frame(detalle, style='Tarjeta.TFrame')
+        metricas.grid(row=6, column=0, sticky='ew', pady=(0, 8))
+        metricas.columnconfigure((0, 1), weight=1, uniform='metricas')
+        self.metricas_lote = {}
+        for indice, (campo, etiqueta) in enumerate((
+            ('correctos', 'Convertidas'), ('omitidos', 'Ya existentes'),
+            ('errores', 'Con error'), ('pendientes', 'Pendientes'),
+        )):
+            tarjeta = tk.Frame(metricas, bg='#f7f5f2', padx=8, pady=4)
+            tarjeta.grid(row=indice // 2, column=indice % 2, sticky='ew', padx=(0, 4), pady=(0, 4))
+            tk.Label(tarjeta, text=etiqueta, bg='#f7f5f2', fg='#514950', font=('Segoe UI', 9)).pack(side='left')
+            valor = tk.Label(tarjeta, text='—', bg='#f7f5f2', fg='#302a31', font=('Segoe UI', 9, 'bold'))
+            valor.pack(side='right')
+            self.metricas_lote[campo] = valor
+
         self.siguiente = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=350)
-        self.siguiente.grid(row=6, column=0, sticky='ew', pady=(0, 12))
+        self.siguiente.grid(row=7, column=0, sticky='ew', pady=(0, 8))
         acciones = ttk.Frame(detalle, style='Tarjeta.TFrame')
-        acciones.grid(row=7, column=0, sticky='ew')
-        control = ttk.Frame(acciones, style='Tarjeta.TFrame')
-        control.pack(fill='x', pady=3)
-        self.btn_iniciar = ttk.Button(control, text='Ejecutar migración', command=self._iniciar)
-        self.btn_iniciar.pack(side='left', fill='x', expand=True, padx=(0, 4))
-        self.btn_detener = ttk.Button(control, text='Detener migración', command=self._detener)
-        self.btn_detener.pack(side='left', fill='x', expand=True)
-        self.btn_reprocesar = ttk.Button(
-            acciones, text='Reprocesar pendientes',
-            command=self._reprocesar,
-        )
-        self.btn_reprocesar.pack(fill='x', pady=3)
-        self.btn_exportar = ttk.Button(acciones, text='Exportar MARCXML del lote', command=self._exportar)
-        self.btn_exportar.pack(fill='x', pady=3)
-        self.btn_revisar = ttk.Button(
-            acciones, text='Visualizar registros migrados',
-            command=self._revisar,
-        )
-        self.btn_revisar.pack(fill='x', pady=3)
-        fila = ttk.Frame(acciones, style='Tarjeta.TFrame')
-        fila.pack(fill='x', pady=3)
-        self.btn_incidencias = ttk.Button(fila, text='Ver incidencias', command=self._incidencias)
-        self.btn_incidencias.pack(side='left', fill='x', expand=True, padx=(0, 4))
-        self.btn_resumen = ttk.Button(fila, text='Guardar resumen', command=self._resumen)
-        self.btn_resumen.pack(side='left', fill='x', expand=True)
-        self.actualizado = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=350)
-        self.actualizado.grid(row=8, column=0, sticky='ew', pady=(12, 0))
+        acciones.grid(row=8, column=0, sticky='ew')
+        acciones.columnconfigure((0, 1), weight=1, uniform='acciones')
+        self.btn_iniciar = ttk.Button(acciones, text='Ejecutar migración', command=self._iniciar)
+        self.btn_detener = ttk.Button(acciones, text='Detener migración', command=self._detener)
+        self.btn_reprocesar = ttk.Button(acciones, text='Reprocesar pendientes', command=self._reprocesar)
+        self.btn_exportar = ttk.Button(acciones, text='Exportar MARCXML', command=self._exportar)
+        self.btn_revisar = ttk.Button(acciones, text='Revisar fichas', command=self._revisar)
+        self.btn_incidencias = ttk.Button(acciones, text='Ver incidencias', command=self._incidencias)
+        self.btn_resumen = ttk.Button(acciones, text='Guardar reporte', command=self._resumen)
+        for indice, boton in enumerate((
+            self.btn_iniciar, self.btn_detener, self.btn_reprocesar, self.btn_exportar,
+            self.btn_revisar, self.btn_incidencias,
+        )):
+            boton.grid(row=indice // 2, column=indice % 2, sticky='ew', padx=(0, 4), pady=2)
+        self.btn_resumen.grid(row=3, column=0, columnspan=2, sticky='ew', padx=(0, 4), pady=2)
+        self.actualizado = ttk.Label(detalle, style='Tarjeta.TLabel')
+        self.actualizado.grid(row=9, column=0, sticky='ew', pady=(8, 0))
         ttk.Button(
             self.historial_tab, text='Ver actividad del lote', style='Quiet.TButton',
             command=self._actividad,
@@ -749,7 +817,8 @@ class PanelLotes(ttk.Frame):
         if not ruta:
             return
         columnas = (
-            'lote', 'fuente', 'estado', 'etapa', 'progreso_porcentaje',
+            'lote', 'fuente', 'usuario', 'fecha_ejecucion', 'lote_anterior',
+            'estado', 'etapa', 'progreso_porcentaje',
             'recibidos', 'objetivo', 'procesados', 'pendientes', 'correctos',
             'omitidos', 'errores', 'ejemplares', 'servidor_destino',
             'base_datos', 'creado_en', 'actualizado_en', 'version_mapeo',
@@ -762,6 +831,9 @@ class PanelLotes(ttk.Frame):
                     escritor.writerow({
                         'lote': lote.id,
                         'fuente': os.path.basename(lote.fuente),
+                        'usuario': _celda_csv(lote.usuario or 'Sin registrar'),
+                        'fecha_ejecucion': lote.iniciado_en or '',
+                        'lote_anterior': lote.lote_origen or '',
                         'estado': ESTADOS[lote.estado],
                         'etapa': ETAPAS[lote.etapa],
                         'progreso_porcentaje': lote.progreso,
@@ -831,6 +903,8 @@ class PanelLotes(ttk.Frame):
             self.nombre.config(text='Todo listo para comenzar')
             for etiqueta in (self.estado, self.etapa, self.conteos, self.siguiente, self.actualizado):
                 etiqueta.config(text='')
+            for valor in self.metricas_lote.values():
+                valor.config(text='—')
             self.barra['value'] = 0
         else:
             self.identificador.config(text=lote.id)
@@ -846,15 +920,21 @@ class PanelLotes(ttk.Frame):
                 text=ESTADOS[lote.estado],
                 foreground=colores_estado[lote.estado],
             )
-            self.etapa.config(text='Etapa: ' + ETAPAS[lote.etapa])
+            inicio = (datetime.fromisoformat(lote.iniciado_en).strftime('%d/%m/%Y %H:%M')
+                      if lote.iniciado_en else '')
+            usuario = f'Ejecutada por {lote.usuario}' if lote.usuario else 'Usuario sin registrar'
+            self.etapa.config(text=(
+                usuario
+                + (f' · {inicio}' if inicio else '')
+                + f'\n{ETAPAS[lote.etapa]}'
+            ))
             self.barra['value'] = lote.progreso
             self.conteos.config(text=(
-                f'{lote.procesados:,} de {lote.total_objetivo:,} fichas · {lote.progreso:g} %\n'
-                f'{lote.correctos:,} correctas  ·  {lote.omitidos:,} omitidas  ·  {lote.errores:,} errores\n'
-                f'{lote.pendientes:,} pendientes  ·  {lote.ejemplares:,} ejemplares\n'
-                f'Mapeo MARC21 {lote.version_mapeo or "no registrado"}'
-                f'{(" · SHA-256 " + lote.huella_mapeo) if lote.huella_mapeo else ""}'
+                f'Procesadas  {lote.procesados:,} / {lote.total_objetivo:,}  ·  {lote.progreso:g} %\n'
+                f'Ejemplares guardados  {lote.ejemplares:,}'
             ))
+            for campo, valor in self.metricas_lote.items():
+                valor.config(text=f'{getattr(lote, campo):,}')
             pasos = {
                 'en_espera': 'Valida las conexiones y ejecuta este lote.',
                 'en_proceso': 'Migración en curso. El avance se actualiza automáticamente.',
@@ -868,13 +948,19 @@ class PanelLotes(ttk.Frame):
             self.siguiente.config(text=siguiente)
             self.actualizado.config(text='Última actualización: ' + datetime.fromisoformat(lote.actualizado_en).strftime('%d/%m/%Y %H:%M:%S'))
         politica = self.politica(lote, self.demo.get())
+        principal = next((accion for accion in (
+            'detener', 'iniciar', 'exportar', 'incidencias', 'reprocesar', 'revision', 'resumen',
+        ) if politica[accion]), None)
         for accion, boton in (
             ('iniciar', self.btn_iniciar), ('detener', self.btn_detener),
             ('reprocesar', self.btn_reprocesar),
             ('exportar', self.btn_exportar), ('revision', self.btn_revisar),
             ('incidencias', self.btn_incidencias), ('resumen', self.btn_resumen),
         ):
-            boton.configure(state='normal' if politica[accion] else 'disabled')
+            boton.configure(
+                state='normal' if politica[accion] else 'disabled',
+                style='Primary.TButton' if accion == principal else 'TButton',
+            )
         self.btn_nueva_migracion.configure(
             state='normal' if politica.get('nueva_migracion', False) else 'disabled',
         )
@@ -1836,18 +1922,33 @@ class PanelLotes(ttk.Frame):
     def _actividad(self):
         lote = self.lote_actual()
         if lote:
-            self._ventana_texto(f'Actividad · {lote.id}', '\n\n'.join(f'{item["fecha"]}\n{item["mensaje"]}' for item in reversed(lote.actividad)))
+            tecnico = (
+                f'Versión de mapeo: {lote.version_mapeo or "Sin registrar"}\n'
+                f'Huella del mapeo: {lote.huella_mapeo or "Sin registrar"}'
+            )
+            eventos = '\n\n'.join(f'{item["fecha"]}\n{item["mensaje"]}' for item in reversed(lote.actividad))
+            self._ventana_texto(f'Actividad · {lote.id}', tecnico + '\n\n' + eventos)
 
     def _resumen(self):
         lote = self.lote_actual()
         if not lote or not self.politica(lote, self.demo.get())['resumen']:
             return
-        ruta = filedialog.asksaveasfilename(parent=self, title='Guardar resumen del lote', initialfile=f'{"EJEMPLO-" if self.demo.get() else ""}{lote.id}.json', defaultextension='.json', filetypes=[('Resumen JSON', '*.json')])
+        demostracion = self.demo.get()
+        ruta = filedialog.asksaveasfilename(
+            parent=self, title='Guardar reporte del lote',
+            initialfile=f'{"EJEMPLO-" if demostracion else ""}{lote.id}.csv',
+            defaultextension='.csv',
+            filetypes=[('Detalle por ficha CSV', '*.csv'), ('Resumen JSON', '*.json')],
+        )
         if not ruta:
             return
-        try:
-            with open(ruta, 'w', encoding='utf-8') as archivo:
-                json.dump({'demostracion': self.demo.get(), 'lote': asdict(lote), 'procesados': lote.procesados, 'pendientes': lote.pendientes, 'progreso': lote.progreso}, archivo, ensure_ascii=False, indent=2)
-            messagebox.showinfo('Resumen guardado', 'Se guardó el reporte de seguimiento del lote.', parent=self)
-        except OSError as exc:
-            messagebox.showerror('No se pudo guardar', str(exc), parent=self)
+
+        def guardar():
+            try:
+                detalle = lote if demostracion else self.obtener(lote.id)
+                escribir_reporte_lote(ruta, detalle, demostracion)
+                self.publicar(messagebox.showinfo, 'Reporte guardado', 'Se guardó el reporte del lote.')
+            except Exception as exc:
+                self.publicar(messagebox.showerror, 'No se pudo guardar el reporte', str(exc))
+
+        Thread(target=guardar, daemon=True).start()

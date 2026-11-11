@@ -85,24 +85,33 @@ class AccessReader:
         Ficha_No, Fecha, FechaMod, DatosFijos, EtiquetasMARC, TipoMaterial,
         ISBN, Titulo, Autor, Clasificacion
         """
-        cursor = self.conn.cursor()
-        if limite and limite > 0:
-            sql = """
-                SELECT TOP {limite} Ficha_No, Fecha, FechaMod, DatosFijos,
-                EtiquetasMARC, TipoMaterial, ISBN, Titulo, Autor, Clasificacion
-                FROM FICHAS
-            """.format(limite=limite)
-        else:
-            sql = """
-                SELECT Ficha_No, Fecha, FechaMod, DatosFijos, EtiquetasMARC,
-                       TipoMaterial, ISBN, Titulo, Autor, Clasificacion
-                FROM FICHAS
-            """
+        return [ficha for bloque in self.iterar_bloques(limite) for ficha in bloque]
 
-        cursor.execute(sql)
-        columnas = [desc[0] for desc in cursor.description]
-        filas = cursor.fetchall()
-        return [dict(zip(columnas, fila)) for fila in filas]
+    def iterar_bloques(self, limite=None, tamano=250):
+        """Lee un bloque a la vez en un orden estable, incluso al repetir un lote."""
+        cursor = self.conn.cursor()
+        try:
+            tope = f'TOP {int(limite)} ' if limite and limite > 0 else ''
+            cursor.execute(
+                f'SELECT {tope}Ficha_No, Fecha, FechaMod, DatosFijos, EtiquetasMARC, '
+                'TipoMaterial, ISBN, Titulo, Autor, Clasificacion FROM FICHAS ORDER BY Ficha_No'
+            )
+            columnas = [desc[0] for desc in cursor.description]
+            while filas := cursor.fetchmany(tamano):
+                yield [dict(zip(columnas, fila)) for fila in filas]
+        finally:
+            cursor.close()
+
+    def codigos_adquisicion_repetidos(self):
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                'SELECT Trim(NumAdqui) FROM EJEMPLARES '
+                'WHERE NumAdqui IS NOT NULL GROUP BY Trim(NumAdqui) HAVING COUNT(*) > 1'
+            )
+            return {str(fila[0]).strip().casefold() for fila in cursor if fila[0]}
+        finally:
+            cursor.close()
 
     def leer_ejemplares_por_ficha(self, ficha_nos: List[int]) -> Dict[int, List[Dict]]:
         """

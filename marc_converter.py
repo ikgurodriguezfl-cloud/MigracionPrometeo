@@ -409,12 +409,22 @@ class MarcConverter:
                 self._incidencia(incidencias, tag, 'Ambiguo',
                                  'La publicación no separa lugar y editorial; se conserva completa en $a y en 887.')
                 return [Subfield('a', contenido)]
-            editorial, coma, fecha = resto.rpartition(',')
             subcampos = [Subfield('a', lugar.rstrip() + ' :')]
-            if coma and re.match(r'\s*\[?[cp]?\s*\d{4}', fecha, re.IGNORECASE):
-                subcampos.extend([Subfield('b', editorial.strip() + ','), Subfield('c', fecha.strip())])
+            # Conserva juntas las fechas sucesivas al final de la publicación.
+            fechas = re.search(
+                r',\s*(\[?[cp]?\s*\d{4}(?:\s*[,;/–-]\s*[cp]?\s*\d{4})*\]?[.?]?)\s*$',
+                resto, re.IGNORECASE,
+            )
+            if fechas and resto[:fechas.start()].strip():
+                subcampos.extend([
+                    Subfield('b', resto[:fechas.start()].strip() + ','),
+                    Subfield('c', fechas[1]),
+                ])
             else:
                 subcampos.append(Subfield('b', resto.strip()))
+                if re.search(r',\s*\[?[cp]?\s*\d{4}', resto, re.IGNORECASE):
+                    self._incidencia(incidencias, tag, 'Ambiguo',
+                                     'No se pudo separar la fecha de publicación con certeza.')
             return subcampos
         if transformacion == 'idioma':
             idiomas = self._idiomas_access(contenido)
@@ -472,6 +482,17 @@ class MarcConverter:
                 subfields=subcampos,
             ))
 
+    @staticmethod
+    def _isbn_valido(valor):
+        numero = re.sub(r'[\s-]', '', valor.split('(', 1)[0]).upper()
+        if re.fullmatch(r'\d{9}[\dX]', numero):
+            return sum((10 - i) * (10 if c == 'X' else int(c))
+                       for i, c in enumerate(numero)) % 11 == 0
+        if re.fullmatch(r'97[89]\d{10}', numero):
+            return sum(int(c) * (1 if i % 2 == 0 else 3)
+                       for i, c in enumerate(numero)) % 10 == 0
+        return False
+
     def ficha_a_record(self, ficha: Dict, ejemplares: List[Dict],
                        branch_mapping: Optional[Dict[str, str]] = None,
                        status_mapping: Optional[Dict[str, str]] = None,
@@ -520,6 +541,11 @@ class MarcConverter:
                                  'La etiqueta no tiene correspondencia; su contenido se conserva en 887.')
         if record.get('245') and not any(record.get_fields(tag) for tag in ('100', '110', '111', '130')):
             record['245'].indicator1 = '0'
+        for campo in record.get_fields('020'):
+            for isbn in campo.get_subfields('a'):
+                if not self._isbn_valido(isbn):
+                    self._incidencia(incidencias, '020$a', 'Ambiguo',
+                                     f'ISBN con formato o dígito verificador dudoso: {isbn}.')
         return record
 
     def record_a_marcxml(self, record: Record) -> str:

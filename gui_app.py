@@ -13,7 +13,7 @@ from auth import AuthenticationService
 from access_reader import AccessReader
 from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
-from lotes import HistorialLotes, acciones_lote
+from lotes import ETAPAS, HistorialLotes, acciones_lote, ahora
 from panel_lotes import PanelLotes
 from permissions import (
     requerir_permiso, AccesoDenegado, tiene_permiso,
@@ -68,7 +68,6 @@ class MigracionApp:
         self.config = self.cargar_config()
 
         self.access_reader: Optional[AccessReader] = None
-        self.mysql_writer: Optional[MySQLWriter] = None
 
         self.marc_converter = MarcConverter()
 
@@ -89,6 +88,9 @@ class MigracionApp:
             holdingbranch=self.var_holdingbranch.get(),
         )
         self.migracion_en_curso = False
+        self._preparando_lote = False
+        self._validando_access = False
+        self._validando_mysql = False
         self._mysql_validado = False
         self._configuracion_confirmada = False
         self._detencion_solicitada = threading.Event()
@@ -156,7 +158,8 @@ class MigracionApp:
         self.frame_log = ttk.Frame(self.page_container, style='App.TFrame')
 
         self.panel_lotes = PanelLotes(
-            self.page_container, listar=self.historial_lotes.listar, politica=self._politica_lote,
+            self.page_container, listar=lambda: self.historial_lotes.listar(resumen=True),
+            obtener=self.historial_lotes.obtener, publicar=self._publicar_ui, politica=self._politica_lote,
             iniciar=self._iniciar_desde_panel, exportar=self._exportar_marcxml,
             revisar=self._obtener_registros_revision,
             proponer=self._proponer_correccion,
@@ -877,7 +880,7 @@ class MigracionApp:
             politica['revision']
             and tiene_permiso(self.perfil_usuario, 'revision_muestra')
         )
-        politica['nueva_migracion'] = tiene_permiso(
+        politica['nueva_migracion'] = not self.migracion_en_curso and tiene_permiso(
             self.perfil_usuario, 'iniciar_nueva_migracion',
         )
         politica['incidencias'] = bool(
@@ -923,7 +926,7 @@ class MigracionApp:
         if not hasattr(self, 'panel_lotes') or not hasattr(self, 'btn_exportar'):
             return
         self.panel_lotes.actualizar()
-        lote = self.historial_lotes.obtener(self._lote_actual_id)
+        lote = self.historial_lotes.obtener(self._lote_actual_id, resumen=True)
         self.btn_exportar.configure(state='normal' if self._politica_lote(lote)['exportar'] else 'disabled')
         self.btn_ejecutar.configure(
             state='normal' if (
@@ -933,15 +936,24 @@ class MigracionApp:
             ) else 'disabled',
         )
         politica = self._politica_lote(lote)
-        self.btn_detener.configure(state='normal' if politica['detener'] else 'disabled',
-                                  text='Deteniendo…' if politica['detencion_solicitada'] else 'Detener migración')
+        preparando = self._preparando_lote and tiene_permiso(self.perfil_usuario, 'detener_conversion')
+        deteniendo = preparando and self._detencion_solicitada.is_set()
+        self.btn_detener.configure(
+            state='normal' if politica['detener'] or (preparando and not deteniendo) else 'disabled',
+            text='Deteniendo…' if politica['detencion_solicitada'] or deteniendo else 'Detener migración',
+        )
         self._actualizar_navegacion_secuencial()
 
     def _solicitar_detencion(self, identificador=None):
         if not self._requiere_permiso('detener_conversion'):
             return
+        if self._preparando_lote and identificador is None:
+            self._detencion_solicitada.set()
+            self.lbl_estado.configure(text='Deteniendo la preparación…')
+            self._actualizar_panel()
+            return
         identificador = identificador or self._lote_actual_id
-        lote = self.historial_lotes.obtener(identificador)
+        lote = self.historial_lotes.obtener(identificador, resumen=True)
         if not self._politica_lote(lote)['detener']:
             return
         self._detencion_solicitada.set()
@@ -950,7 +962,7 @@ class MigracionApp:
         self._actualizar_panel()
 
     def _iniciar_desde_panel(self, identificador):
-        lote = self.historial_lotes.obtener(identificador)
+        lote = self.historial_lotes.obtener(identificador, resumen=True)
         if not self._politica_lote(lote)['iniciar']:
             messagebox.showwarning('Acción no disponible', 'Valida el respaldo seleccionado antes de iniciar ese lote.')
             return
@@ -964,7 +976,7 @@ class MigracionApp:
     def _reprocesar_desde_panel(self, identificador):
         if not self._requiere_permiso('reprocesar_lote'):
             return
-        lote = self.historial_lotes.obtener(identificador)
+        lote = self.historial_lotes.obtener(identificador, resumen=True)
         if not self._politica_lote(lote).get('reprocesar'):
             messagebox.showwarning(
                 'Reprocesamiento no disponible',
@@ -1014,8 +1026,6 @@ class MigracionApp:
             return
         self._cerrando = True
         self.root.after_cancel(self._after_ui)
-        if self.mysql_writer:
-            self.mysql_writer.close()
         self.root.destroy()
 
     def _sesion_valida(self) -> bool:
@@ -1029,6 +1039,9 @@ class MigracionApp:
             return False
 
     def _cerrar_sesion(self):
+        if self.migracion_en_curso:
+            self.cerrar()
+            return
         if self.auth_service is not None:
             self.auth_service.logout(self.session_token)
         if self.on_logout is not None:
@@ -1243,101 +1256,132 @@ class MigracionApp:
         if not path:
             messagebox.showwarning('Atencion', 'Seleccione primero un archivo .mdb o .accdb')
             return
+        if self._validando_access:
+            return
+        self._validando_access = True
+        self.lbl_conteo_access.config(text='Validando el respaldo de Access…')
+        reproceso = self._lote_reprocesar_id
         try:
-            errores = self._validar_archivo_access(path)
-            if errores:
-                raise ValueError('\n'.join(errores))
+            threading.Thread(
+                target=self._validar_access_en_segundo_plano,
+                args=(path, reproceso), daemon=True,
+            ).start()
+        except RuntimeError as exc:
+            self._terminar_validacion_access(path, None, 0, None, str(exc))
 
-            reader = AccessReader(path)
-            if reader.test_connection():
-                total = reader.contar_fichas()
-                reader.close()
-                if self._lote_reprocesar_id:
-                    origen = self.historial_lotes.obtener(self._lote_reprocesar_id)
-                    if origen is None or os.path.abspath(path) != os.path.abspath(origen.fuente):
-                        raise ValueError('El archivo Access no coincide con el lote seleccionado para reprocesar.')
-                    if total != origen.total_recibidos:
-                        raise ValueError('El respaldo tiene un número de fichas distinto al lote original.')
-                    lote_id = origen.id
-                else:
-                    lote = self.historial_lotes.recibir(path, total)
-                    lote_id = lote.id
-                self._lote_actual_id = lote_id
-                self._validacion_access = self._firma_access(path)
-                self.panel_lotes.seleccionar_real(lote_id)
-                self._actualizar_panel()
-                self.lbl_conteo_access.config(text='Registros FICHAS: ' + str(total))
-                self.log('[OK] Conexion Access exitosa. ' + str(total) + ' fichas encontradas.')
-                messagebox.showinfo('Exito', 'Conexion Access exitosa.\n' + str(total) + ' registros en FICHAS.')
+    def _leer_origen_validado(self, path):
+        firma = self._firma_access(path)
+        errores = self._validar_archivo_access(path)
+        if errores:
+            raise ValueError('\n'.join(errores))
+        lector = AccessReader(path)
+        try:
+            total = lector.contar_fichas()
+        finally:
+            lector.close()
+        if not firma or firma != self._firma_access(path):
+            raise ValueError('El respaldo cambió durante la validación.')
+        return firma, total
+
+    def _origen_reproceso(self, identificador, firma, total):
+        origen = self.historial_lotes.obtener(identificador, resumen=True)
+        if (origen is None or os.path.normcase(os.path.abspath(origen.fuente)) != firma[0]
+                or origen.total_recibidos != total):
+            raise ValueError('El respaldo no coincide con el lote que se desea reprocesar.')
+        return origen
+
+    def _validar_access_en_segundo_plano(self, path, reproceso):
+        try:
+            firma, total = self._leer_origen_validado(path)
+            if reproceso:
+                lote = self._origen_reproceso(reproceso, firma, total)
             else:
-                raise Exception('No se pudo conectar.')
-        except Exception as e:
-            self.log('[ERROR] Access: ' + str(e))
-            messagebox.showerror('Error', 'No se pudo conectar a Access:\n' + str(e))
+                lote = self.historial_lotes.recibir(path, total, incremental=True)
+            self._publicar_ui(self._terminar_validacion_access, path, firma, total, lote.id, None)
+        except Exception as exc:
+            self._publicar_ui(self._terminar_validacion_access, path, None, 0, None, str(exc))
+
+    def _terminar_validacion_access(self, path, firma, total, identificador, error):
+        self._validando_access = False
+        if self.var_access_path.get().strip() != path:
+            self._actualizar_info_access()
+            return
+        if error:
+            self.lbl_conteo_access.config(text='El respaldo requiere revisión.')
+            self.log('[ERROR] Access: ' + error)
+            messagebox.showerror('No se pudo validar Access', error)
+            return
+        self._validacion_access = firma
+        self._lote_actual_id = identificador
+        self.panel_lotes.seleccionar_real(identificador)
+        self.lbl_conteo_access.config(text=f'Registros FICHAS: {total:,}')
+        self.log(f'[OK] Access validado. {total:,} fichas encontradas.')
+        self._actualizar_panel()
 
     def _probar_mysql(self):
-        if not self._requiere_permiso('validar_mysql'):
+        if (not self._requiere_permiso('validar_mysql') or self._validando_mysql
+                or self.migracion_en_curso):
             return
-        self._mysql_validado = False
-        self._configuracion_confirmada = False
-        config = {
-            'host': self.entry_host.get(),
-            'port': int(self.entry_port.get() or 3306),
-            'user': self.entry_user.get(),
-            'password': self.entry_pass.get(),
-            'database': self.entry_db.get(),
-            'charset': 'utf8mb4',
-        }
-        try:
-            writer = MySQLWriter(config)
-            if writer.test_connection():
-                writer.crear_tablas()
-                self.mysql_writer = writer
-                self._mysql_validado = True
-                stats = self._obtener_stats_mysql(config)
-                self.lbl_conteo_mysql.config(text='Registros migrados: ' + str(stats['total_registros']))
-                self.log('[OK] Conexion MySQL exitosa. Tablas verificadas.')
-                messagebox.showinfo('Exito', 'Conexion MySQL exitosa y tablas creadas/verificadas.')
-            else:
-                raise Exception('No se pudo conectar.')
-        except Exception as e:
-            msg = str(e)
-            if 'Unknown database' in msg or 'unknown database' in msg:
-                crear = messagebox.askyesno(
-                    'Base de datos no existe',
-                    f'La base de datos "{config["database"]}" no existe.\n\n'
-                    '¿Quieres crearla automáticamente?'
-                )
-                if crear:
-                    try:
-                        writer = MySQLWriter(config)
-                        writer.ensure_database()
-                        writer.crear_tablas()
-                        self.mysql_writer = writer
-                        self._mysql_validado = True
-                        stats = self._obtener_stats_mysql(config)
-                        self.lbl_conteo_mysql.config(text='Registros migrados: ' + str(stats['total_registros']))
-                        self.log('[OK] Base de datos creada y tablas verificadas.')
-                        messagebox.showinfo('Exito', 'Base de datos creada y tablas verificadas.')
-                    except Exception as e2:
-                        self.log('[ERROR] MySQL: ' + str(e2))
-                        messagebox.showerror('Error', 'No se pudo crear la base de datos:\n' + str(e2))
-                else:
-                    self.log('[INFO] Usuario canceló la creación de la base de datos.')
-            else:
-                self.log('[ERROR] MySQL: ' + msg)
-                messagebox.showerror('Error', 'No se pudo conectar a MySQL:\n' + msg)
-        finally:
-            self._actualizar_panel()
+        destino = self._destino_actual()
+        if not destino.get('host') or not destino.get('database') or not 1 <= destino['port'] <= 65535:
+            messagebox.showerror('Destino no válido', 'Revisa el servidor, el puerto y la base MySQL.')
+            return
+        config = {**destino, 'user': self.entry_user.get(),
+                  'password': self.entry_pass.get(), 'charset': 'utf8mb4'}
+        self._mysql_validado = self._configuracion_confirmada = False
+        self._iniciar_validacion_mysql(config)
 
-    def _obtener_stats_mysql(self, config: Dict) -> Dict:
+    def _iniciar_validacion_mysql(self, config, crear=False):
+        self._validando_mysql = True
+        self.lbl_conteo_mysql.config(text='Validando el destino MySQL…')
+        self._actualizar_panel()
         try:
-            writer = MySQLWriter(config)
+            threading.Thread(
+                target=self._validar_mysql_en_segundo_plano,
+                args=(config, crear), daemon=True,
+            ).start()
+        except RuntimeError as exc:
+            self._terminar_validacion_mysql(config, None, str(exc), False)
+
+    def _validar_mysql_en_segundo_plano(self, config, crear):
+        writer = MySQLWriter(config)
+        try:
+            if crear:
+                writer.ensure_database()
+            writer.connect()
+            writer.crear_tablas()
             stats = writer.obtener_estadisticas()
+            self._publicar_ui(self._terminar_validacion_mysql, config, stats, None, False)
+        except Exception as exc:
+            falta_base = not crear and bool(exc.args) and exc.args[0] == 1049
+            mensaje = self._error_mysql_sin_secreto(exc, config['password'])
+            self._publicar_ui(self._terminar_validacion_mysql, config, None, mensaje, falta_base)
+        finally:
             writer.close()
-            return stats
-        except Exception:
-            return {'total_registros': 0, 'total_ejemplares': 0, 'por_estado': {}}
+
+    def _terminar_validacion_mysql(self, config, stats, mensaje, falta_base):
+        self._validando_mysql = False
+        destino = self._destino_actual()
+        if (any(config.get(campo) != destino.get(campo) for campo in ('host', 'port', 'database'))
+                or config['user'] != self.entry_user.get()
+                or config['password'] != self.entry_pass.get()):
+            self.lbl_conteo_mysql.config(text='Destino pendiente de validar')
+            return
+        if falta_base and messagebox.askyesno(
+            'Base de datos no existe', f'¿Quieres crear la base de datos {config["database"]}?',
+        ):
+            self._iniciar_validacion_mysql(config, crear=True)
+            return
+        if mensaje:
+            self.lbl_conteo_mysql.config(text='Destino pendiente de validar')
+            self.log('[ERROR] MySQL: ' + mensaje)
+            if not falta_base:
+                messagebox.showerror('No se pudo validar MySQL', mensaje)
+        else:
+            self._mysql_validado = True
+            self.lbl_conteo_mysql.config(text=f'Registros migrados: {stats["total_registros"]:,}')
+            self.log('[OK] Destino MySQL validado. Tablas verificadas.')
+        self._actualizar_panel()
 
     def _iniciar_migracion(self):
         if not self._sesion_valida():
@@ -1362,69 +1406,22 @@ class MigracionApp:
             messagebox.showerror('Error', 'Seleccione un archivo .mdb o .accdb valido.')
             return
 
-        try:
-            errores_validacion = self._validar_archivo_access(path_access)
-        except Exception as e:
-            errores_validacion = [f'No se pudo validar el archivo Access: {e}']
-        if errores_validacion:
-            mensaje = '\n'.join(errores_validacion)
-            self.log('[ERROR] Validacion Access: ' + mensaje.replace('\n', ' | '))
-            messagebox.showerror(
-                'Archivo Access no valido',
-                'No se iniciara la migracion porque el archivo no cumple los requisitos:\n\n'
-                + mensaje,
-            )
+        if self._validando_access or self._validando_mysql:
+            messagebox.showinfo('Validación en curso', 'Espera a que termine la validación de la conexión.')
             return
-
+        destino = self._destino_actual()
+        if not destino.get('host') or not destino.get('database') or not 1 <= destino['port'] <= 65535:
+            messagebox.showerror('Destino no válido', 'Revisa el servidor, el puerto y la base MySQL.')
+            return
+        limite_str = self.var_limite.get().strip()
+        if not limite_str.isdecimal():
+            messagebox.showerror('Límite no válido', 'Usa un entero no negativo. 0 procesa todo el respaldo.')
+            return
+        limite = int(limite_str)
         config_mysql = {
-            'host': self.entry_host.get(),
-            'port': self.entry_port.get() or '3306',
-            'user': self.entry_user.get(),
-            'password': self.entry_pass.get(),
-            'database': self.entry_db.get(),
+            **destino, 'user': self.entry_user.get(), 'password': self.entry_pass.get(),
             'charset': 'utf8mb4',
         }
-
-        limite_str = self.var_limite.get().strip()
-        try:
-            if not limite_str.isdigit():
-                raise ValueError('El límite debe ser un entero no negativo; 0 significa todos.')
-            limite = int(limite_str)
-            config_mysql['port'] = int(config_mysql['port'])
-            if not 1 <= config_mysql['port'] <= 65535:
-                raise ValueError('El puerto MySQL debe estar entre 1 y 65535.')
-            reader = AccessReader(path_access)
-            try:
-                total = reader.contar_fichas()
-            finally:
-                reader.close()
-            self._validacion_access = self._firma_access(path_access)
-            lote_origen = (
-                self.historial_lotes.obtener(self._lote_reprocesar_id)
-                if self._lote_reprocesar_id else None
-            )
-            if self._lote_reprocesar_id and (
-                    lote_origen is None
-                    or os.path.abspath(path_access) != os.path.abspath(lote_origen.fuente)
-                    or total != lote_origen.total_recibidos):
-                raise ValueError(
-                    'El archivo Access ya no coincide con el lote seleccionado para reprocesar.'
-                )
-            if not self._lote_reprocesar_id:
-                lote = self.historial_lotes.recibir(path_access, total)
-                self._lote_actual_id = lote.id
-                self.panel_lotes.seleccionar_real(lote.id)
-            if not total:
-                if not self._lote_reprocesar_id:
-                    self.historial_lotes.actualizar(lote.id, estado='con_incidencias',
-                        incidencias=[{'referencia': 'Origen', 'mensaje': 'El respaldo no contiene fichas para migrar.'}],
-                        evento='Ejecución detenida: el respaldo no contiene fichas.')
-                    self._actualizar_panel()
-                messagebox.showwarning('Sin registros', 'El respaldo no contiene fichas para migrar.')
-                return
-        except Exception as exc:
-            messagebox.showerror('No se pudo preparar el lote', str(exc))
-            return
         saltar = self.var_saltar_existentes.get()
 
         try:
@@ -1448,72 +1445,88 @@ class MigracionApp:
             messagebox.showerror('Mapeo no válido', str(exc))
             return
         self.marc_converter = conversor
-
-        if self._lote_reprocesar_id:
-            try:
-                lote = self.historial_lotes.recibir_reprocesamiento(
-                    self._lote_reprocesar_id, total,
-                )
-            except (OSError, ValueError) as exc:
-                messagebox.showerror('No se pudo crear el reprocesamiento', str(exc))
-                return
-            limite = lote.total_objetivo if lote.total_objetivo < total else 0
-            saltar = True
-            self._lote_reprocesar_id = None
-            self._lote_actual_id = lote.id
-            self.panel_lotes.seleccionar_real(lote.id)
-
-        try:
-            self.historial_lotes.actualizar(lote.id, estado='en_proceso', etapa='conexion',
-                total_objetivo=min(total, limite) if limite else total, destino=self._destino_actual(),
-                version_mapeo=self.marc_converter.mapping_version,
-                huella_mapeo=huella_mapeo,
-                evento=(f'Migración iniciada con mapeo MARC21 versión '
-                        f'{self.marc_converter.mapping_version} '
-                        f'(SHA-256 {huella_mapeo}). Conectando al destino MySQL.'))
-        except (OSError, ValueError) as exc:
-            messagebox.showerror('No se pudo registrar el lote', str(exc))
-            return
-        self.migracion_en_curso = True
+        self.migracion_en_curso = self._preparando_lote = True
+        self._lote_actual_id = None
         self._detencion_solicitada.clear()
-        self.btn_ejecutar.config(state='disabled')
         self.progress['value'] = 0
-        self.lbl_estado.config(text='Iniciando...')
-        self.btn_exportar.configure(state='disabled')
+        self.lbl_estado.config(text='Validando el respaldo de Access…')
         self._actualizar_panel()
         self._navegar(self.frame_migracion)
 
-        hilo = threading.Thread(
-            target=self._ejecutar_migracion,
-            args=(path_access, config_mysql, limite, saltar, branch_mapping, status_mapping, lote.id),
-            daemon=True,
-        )
         try:
+            hilo = threading.Thread(
+                target=self._preparar_y_ejecutar,
+                args=(path_access, config_mysql, limite, saltar, branch_mapping, status_mapping,
+                      self._lote_reprocesar_id, self._usuario_actual(), destino, huella_mapeo),
+                daemon=True,
+            )
             hilo.start()
         except RuntimeError as exc:
-            self.historial_lotes.actualizar(lote.id, estado='con_incidencias',
-                incidencias=[{'referencia': 'Ejecución', 'mensaje': str(exc)}],
-                evento='No se pudo iniciar el hilo de migración.')
-            self._finalizar_migracion()
-            messagebox.showerror('No se pudo iniciar', str(exc))
+            self._fallo_preparacion(str(exc))
+
+    def _preparar_y_ejecutar(self, path, config, limite, saltar, sucursales, estados,
+                            reproceso, usuario, destino, huella):
+        try:
+            firma, total = self._leer_origen_validado(path)
+            if self._detencion_solicitada.is_set():
+                self._publicar_ui(self._fallo_preparacion, None)
+                return
+            if not total:
+                raise ValueError('El respaldo no contiene fichas para migrar.')
+            if reproceso:
+                origen = self._origen_reproceso(reproceso, firma, total)
+                if origen.destino != destino:
+                    raise ValueError('El destino MySQL debe coincidir con el lote original.')
+                lote = self.historial_lotes.recibir_reprocesamiento(reproceso, total, incremental=True)
+                limite = lote.total_objetivo
+                saltar = True
+            else:
+                lote = self.historial_lotes.recibir(path, total, incremental=True)
+            objetivo = min(total, limite) if limite else total
+            self.historial_lotes.actualizar(
+                lote.id, estado='en_proceso', etapa='conexion', total_objetivo=objetivo,
+                destino=destino, usuario=usuario, iniciado_en=ahora(), omitir_existentes=saltar,
+                version_mapeo=self.marc_converter.mapping_version, huella_mapeo=huella,
+                evento='Respaldo validado. Conectando al destino MySQL.',
+            )
+        except Exception as exc:
+            self._publicar_ui(self._fallo_preparacion, self._error_mysql_sin_secreto(exc, config.get('password')))
+            return
+        self._publicar_ui(self._lote_preparado, lote.id, firma)
+        self._ejecutar_migracion(path, config, objetivo, saltar, sucursales, estados, lote.id, firma=firma)
+
+    def _lote_preparado(self, identificador, firma):
+        self._preparando_lote = False
+        self._validacion_access = firma
+        self._lote_reprocesar_id = None
+        self._lote_actual_id = identificador
+        self.panel_lotes.seleccionar_real(identificador)
+        self._mostrar_avance_lote(identificador)
+
+    def _fallo_preparacion(self, mensaje):
+        self._finalizar_migracion()
+        if mensaje:
+            self.lbl_estado.config(text='No se pudo preparar la migración.')
+            self.log('[ERROR] Preparación: ' + mensaje)
+            messagebox.showerror('No se pudo preparar el lote', mensaje)
+        else:
+            self.lbl_estado.config(text='Preparación detenida.')
 
     def _ejecutar_migracion(self, path_access, config_mysql, limite, saltar,
-                            branch_mapping, status_mapping, lote_id):
-        reader = writer = None
+                            branch_mapping, status_mapping, lote_id, *, firma=None):
+        reader = writer = bloques = None
         cont_ok = cont_err = cont_omitidos = cont_ejemplares = 0
-        fichas_correctas = []
+        filas_nuevas = []
         incidencias = []
         ultimo_avance = monotonic()
 
-        def mensaje_seguro(exc):
-            mensaje = str(exc)
-            clave = config_mysql.get('password')
-            return mensaje.replace(clave, '***') if clave else mensaje
-
         def guardar_avance(**extra):
-            self.historial_lotes.actualizar(lote_id, correctos=cont_ok, errores=cont_err,
+            self.historial_lotes.actualizar(
+                lote_id, filas=filas_nuevas, correctos=cont_ok, errores=cont_err,
                 omitidos=cont_omitidos, ejemplares=cont_ejemplares,
-                fichas_correctas=fichas_correctas, incidencias=incidencias[-100:], **extra)
+                incidencias=incidencias[-100:], **extra,
+            )
+            filas_nuevas.clear()
             self._publicar_ui(self._mostrar_avance_lote, lote_id)
 
         def comprobar_detencion():
@@ -1524,155 +1537,181 @@ class MigracionApp:
             comprobar_detencion()
             reader = AccessReader(path_access)
             writer = MySQLWriter(config_mysql)
-            comprobar_detencion()
             writer.connect()
             comprobar_detencion()
             writer.crear_tablas()
             comprobar_detencion()
             guardar_avance(etapa='lectura', evento='Destino conectado. Leyendo fichas del respaldo.')
-            lote = self.historial_lotes.obtener(lote_id)
-            total_origen = reader.contar_fichas()
+            lote = self.historial_lotes.obtener(lote_id, resumen=True)
+            if ((firma and self._firma_access(path_access) != firma)
+                    or (firma is None and reader.contar_fichas() != lote.total_recibidos)):
+                raise ValueError('El respaldo cambió después de validarlo. Vuelve a validarlo.')
             comprobar_detencion()
-            if total_origen != lote.total_recibidos:
-                raise ValueError('El respaldo cambió después de validarlo. Revisa la copia y vuelve a validarla.')
-            total_fichas = lote.total_objetivo
-            self.log(f'Lote {lote_id}: {total_fichas} fichas a procesar de {lote.total_recibidos} recibidas.')
-            fichas = reader.leer_fichas(limite=limite if limite > 0 else None)
+            codigos_repetidos = reader.codigos_adquisicion_repetidos()
             comprobar_detencion()
-            if len(fichas) != total_fichas:
-                raise ValueError('El número de fichas leídas no coincide con el alcance del lote.')
-            guardar_avance(etapa='conversion', evento='Convirtiendo fichas a MARC21 y guardando ejemplares.')
-            for idx, ficha in enumerate(fichas, start=1):
+            bloques = iter(reader.iterar_bloques(limite or None))
+            posicion = 0
+            for fichas in bloques:
                 comprobar_detencion()
-                id_ficha = None
-                try:
-                    id_ficha = int(ficha['Ficha_No'])
-                    if saltar and writer.registrar_existe(id_ficha):
-                        if lote.lote_origen:
-                            ejemplares = reader.leer_ejemplares_por_ficha(
-                                [id_ficha],
-                            ).get(id_ficha, [])
-                            agregados, sucursales_sin_mapeo = (
-                                writer.insertar_ejemplares_faltantes(
-                                    id_ficha, ejemplares, branch_mapping,
-                                    signatura=ficha.get('Clasificacion'),
-                                )
-                            )
-                            cont_ejemplares += agregados
-                            for codigo in sorted(set(sucursales_sin_mapeo)):
-                                mensaje = (
-                                    f'No se pudo asignar una sucursal Koha para '
-                                    f'Biblioteca={codigo!r} durante el reprocesamiento.'
-                                )
-                                incidencias.append({
-                                    'referencia': f'Ficha {id_ficha} · Biblioteca',
-                                    'mensaje': mensaje,
-                                })
-                        cont_omitidos += 1
-                    else:
-                        ejemplares = reader.leer_ejemplares_por_ficha([id_ficha]).get(id_ficha, [])
-                        incidencias_conversion = []
-                        record = self.marc_converter.ficha_a_record(ficha, ejemplares,
-                            branch_mapping=branch_mapping, status_mapping=status_mapping,
-                            incidencias=incidencias_conversion)
-                        referencia = f'Ficha {id_ficha}'
-                        for incidencia in incidencias_conversion:
-                            incidencias.append({
-                                'referencia': referencia + ' · ' + incidencia['referencia'],
-                                'mensaje': incidencia['mensaje'],
-                            })
-                            self.log(
-                                f"[AVISO] Lote {lote_id}, {referencia}, "
-                                f"{incidencia['referencia']}: {incidencia['mensaje']}"
-                            )
-                        marcxml = self.marc_converter.record_a_marcxml(record)
-                        iso2709 = self.marc_converter.record_a_iso2709(record)
-                        id_registro = writer.insertar_registro_marc(id_ficha, str(id_ficha), marcxml, iso2709)
-                        for ej in ejemplares:
-                            biblioteca = ej.get('Biblioteca')
-                            bc = str(biblioteca).strip() if biblioteca is not None else ''
-                            branch_code = branch_mapping.get(bc) if bc else None
-                            if not bc:
-                                mensaje = 'Faltante: Biblioteca no tiene valor; no se asignó una sucursal Koha.'
-                            elif branch_code is None:
-                                mensaje = (
-                                    f'No contemplado: Biblioteca={bc!r} no tiene correspondencia '
-                                    'autorizada; no se asignó una sucursal Koha.'
-                                )
-                            else:
-                                mensaje = None
-                            if mensaje:
-                                incidencias.append({
-                                    'referencia': referencia + ' · Biblioteca',
-                                    'mensaje': mensaje,
-                                })
-                                self.log(f'[AVISO] Lote {lote_id}, {referencia}: {mensaje}')
-                            writer.insertar_ejemplar(id_registro, id_ficha, ej, branch_code,
-                                                    signatura=ficha.get('Clasificacion'))
-                            cont_ejemplares += 1
-                        cont_ok += 1
-                        fichas_correctas.append(id_ficha)
-                except Exception as exc:
-                    cont_err += 1
-                    mensaje = mensaje_seguro(exc)
-                    incidencias.append({'referencia': f'Ficha {id_ficha}' if id_ficha is not None else f'Fila {idx}', 'mensaje': mensaje})
-                    self.log(f'[ERROR] Lote {lote_id}, ficha {id_ficha}: {mensaje}')
+                ids = []
+                for ficha in fichas:
                     try:
-                        writer.insertar_log('ERROR', mensaje, id_ficha=id_ficha)
-                    except Exception:
-                        pass
-                if idx % 25 == 0 or idx == total_fichas or monotonic() - ultimo_avance >= 0.5:
-                    guardar_avance()
-                    ultimo_avance = monotonic()
+                        ids.append(int(ficha['Ficha_No']))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                ejemplares_por_ficha = reader.leer_ejemplares_por_ficha(ids)
+                comprobar_detencion()
+                if not posicion:
+                    guardar_avance(etapa='conversion', evento='Convirtiendo y guardando fichas con sus ejemplares.')
+
+                for ficha in fichas:
+                    comprobar_detencion()
+                    posicion += 1
+                    id_ficha = None
+                    referencia = f'Fila {posicion}'
+                    estado_ficha = 'Rechazada'
+                    motivos = []
+                    try:
+                        id_ficha = int(ficha['Ficha_No'])
+                        if not 0 <= id_ficha <= 4294967295:
+                            id_ficha = None
+                            raise ValueError('El identificador de Access está fuera del rango admitido.')
+                        referencia = f'Ficha {id_ficha}'
+                        ejemplares = ejemplares_por_ficha.get(id_ficha, [])
+                        existe = saltar and writer.registrar_existe(id_ficha)
+                        if existe and not lote.lote_origen:
+                            estado_ficha = 'Omitida'
+                            motivos.append('La ficha ya existe en el destino.')
+                            cont_omitidos += 1
+                        else:
+                            for ejemplar in ejemplares:
+                                codigo = str(ejemplar.get('NumAdqui') or '').strip()
+                                if codigo.casefold() in codigos_repetidos:
+                                    raise ValueError(f'Código de barras repetido en Access: {codigo}.')
+
+                            with writer.transaccion_ficha():
+                                if existe:
+                                    agregados, sucursales = writer.insertar_ejemplares_faltantes(
+                                        id_ficha, ejemplares, branch_mapping,
+                                        signatura=ficha.get('Clasificacion'),
+                                    )
+                                    avisos = [
+                                        ('Biblioteca', f'No contemplado: Biblioteca={codigo!r} sin sucursal Koha.')
+                                        for codigo in sorted(set(sucursales))
+                                    ]
+                                else:
+                                    agregados, avisos = self._convertir_y_guardar_ficha(
+                                        writer, ficha, id_ficha, ejemplares,
+                                        branch_mapping, status_mapping,
+                                    )
+                            cont_ejemplares += agregados
+                            for campo, mensaje in avisos:
+                                motivos.append(f'{campo}: {mensaje}')
+                                incidencias.append({
+                                    'referencia': referencia + ' · ' + campo, 'mensaje': mensaje,
+                                })
+                            if existe:
+                                cont_omitidos += 1
+                                estado_ficha = 'Omitida'
+                                motivos.append(f'Ficha existente. Ejemplares agregados: {agregados}.')
+                            else:
+                                cont_ok += 1
+                                estado_ficha = 'Convertida'
+                    except Exception as exc:
+                        cont_err += 1
+                        mensaje = self._error_mysql_sin_secreto(exc, config_mysql.get('password'))
+                        motivos.append(mensaje)
+                        incidencias.append({'referencia': referencia, 'mensaje': mensaje})
+                        self.log(f'[ERROR] Lote {lote_id}, {referencia}: {mensaje}')
+                        try:
+                            writer.insertar_log('ERROR', mensaje, id_ficha=id_ficha)
+                        except Exception:
+                            pass
+                    filas_nuevas.append({
+                        'id': id_ficha, 'referencia': referencia, 'titulo': str(ficha.get('Titulo') or ''),
+                        'estado': estado_ficha, 'motivos': motivos,
+                    })
+                    if len(filas_nuevas) >= 250 or monotonic() - ultimo_avance >= 0.7:
+                        guardar_avance()
+                        ultimo_avance = monotonic()
+
+            if posicion != lote.total_objetivo:
+                raise ValueError('El número de fichas leídas no coincide con el alcance del lote.')
+            if firma and self._firma_access(path_access) != firma:
+                raise ValueError('El respaldo cambió durante la ejecución. Revisa el lote antes de continuar.')
             tiene_incidencias = bool(cont_err or incidencias)
             estado = 'con_incidencias' if tiene_incidencias else 'concluido'
-            guardar_avance(estado=estado, etapa='revision' if tiene_incidencias else 'finalizado',
-                           evento=f'Ejecución terminada. Correctos: {cont_ok}; omitidos: {cont_omitidos}; errores: {cont_err}.')
-            self.log(f'Lote {lote_id} finalizado. OK: {cont_ok}, omitidos: {cont_omitidos}, errores: {cont_err}.')
+            guardar_avance(
+                estado=estado, etapa='revision' if tiene_incidencias else 'finalizado',
+                evento=f'Ejecución terminada. Convertidas: {cont_ok}; omitidas: {cont_omitidos}; errores: {cont_err}.',
+            )
+            self.log(f'Lote {lote_id} finalizado. Convertidas: {cont_ok}, omitidas: {cont_omitidos}, errores: {cont_err}.')
             self._publicar_ui(self._finalizar_migracion)
             self._publicar_ui(messagebox.showwarning if tiene_incidencias else messagebox.showinfo,
                 'Lote con incidencias' if tiene_incidencias else 'Lote concluido',
-                f'Correctos: {cont_ok}\nOmitidos: {cont_omitidos}\nErrores: {cont_err}'
+                f'Convertidas: {cont_ok}\nYa existentes: {cont_omitidos}\nErrores: {cont_err}'
                 f'\nIncidencias: {len(incidencias)}\nEjemplares: {cont_ejemplares}')
         except _DetencionSolicitada:
             try:
-                lote = self.historial_lotes.obtener(lote_id)
+                lote = self.historial_lotes.obtener(lote_id, resumen=True)
                 pendientes = lote.total_objetivo - cont_ok - cont_omitidos - cont_err
-                guardar_avance(estado='detenido', evento=(f'Detenido por el usuario. Correctos: {cont_ok}; '
-                    f'omitidos: {cont_omitidos}; errores: {cont_err}; pendientes: {pendientes}.'))
-                self.log(f'Lote {lote_id} detenido. Se conservaron los avances; pendientes: {pendientes}.')
+                guardar_avance(estado='detenido', evento=f'Detenido por el usuario. Pendientes: {pendientes}.')
                 self._publicar_ui(self._finalizar_migracion)
                 self._publicar_ui(messagebox.showinfo, 'Migración detenida',
-                    f'Se conservaron los avances guardados.\nCorrectos: {cont_ok}\nOmitidos: {cont_omitidos}'
-                    f'\nErrores: {cont_err}\nPendientes: {pendientes}\nLa exportación de este lote queda bloqueada.')
+                    f'Se conservó el avance. Pendientes: {pendientes}.')
             except (OSError, ValueError) as exc:
-                self.log('[ERROR] No se pudo guardar la detención del lote: ' + mensaje_seguro(exc))
                 self._publicar_ui(self._finalizar_migracion)
-                self._publicar_ui(messagebox.showerror, 'No se pudo guardar la detención', mensaje_seguro(exc))
+                self._publicar_ui(messagebox.showerror, 'No se pudo guardar la detención', str(exc))
         except Exception as exc:
-            mensaje = mensaje_seguro(exc)
+            mensaje = self._error_mysql_sin_secreto(exc, config_mysql.get('password'))
             incidencias.append({'referencia': 'Ejecución', 'mensaje': mensaje})
             try:
-                guardar_avance(estado='con_incidencias', evento='Ejecución interrumpida. Revisa el detalle de incidencias.')
+                guardar_avance(estado='con_incidencias', evento='Ejecución interrumpida. Revisa las incidencias.')
             except (OSError, ValueError) as error_historial:
                 self.log('[ERROR] No se pudo guardar el último avance del lote: ' + str(error_historial))
             self.log(f'[ERROR FATAL] Lote {lote_id}: {mensaje}')
             self._publicar_ui(self._finalizar_migracion)
-            self._publicar_ui(messagebox.showerror, 'Lote con incidencias', mensaje)
+            self._publicar_ui(messagebox.showerror, 'Error en migración', mensaje)
         finally:
-            for recurso in (reader, writer):
-                if recurso:
+            for recurso in (bloques, reader, writer):
+                if recurso is not None:
                     try:
                         recurso.close()
                     except Exception:
                         pass
 
+    def _convertir_y_guardar_ficha(self, writer, ficha, id_ficha, ejemplares,
+                                  branch_mapping, status_mapping):
+        incidencias = []
+        record = self.marc_converter.ficha_a_record(
+            ficha, ejemplares, branch_mapping=branch_mapping, status_mapping=status_mapping,
+            incidencias=incidencias,
+        )
+        xml = self.marc_converter.record_a_marcxml(record)
+        iso = self.marc_converter.record_a_iso2709(record)
+        id_registro = writer.insertar_registro_marc(id_ficha, str(id_ficha), xml, iso)
+        avisos = [(item['referencia'], item['mensaje']) for item in incidencias]
+        for ejemplar in ejemplares:
+            biblioteca = ejemplar.get('Biblioteca')
+            codigo = str(biblioteca).strip() if biblioteca is not None else ''
+            sucursal = branch_mapping.get(codigo) if codigo else None
+            if not sucursal and not any(campo in ('952$a', '952$b') for campo, _ in avisos):
+                mensaje = (f'No contemplado: Biblioteca={codigo!r} sin correspondencia Koha.'
+                           if codigo else 'Faltante: Biblioteca no tiene valor.')
+                avisos.append(('Biblioteca', mensaje))
+            writer.insertar_ejemplar(
+                id_registro, id_ficha, ejemplar, sucursal, signatura=ficha.get('Clasificacion'),
+            )
+        return len(ejemplares), avisos
+
     def _mostrar_avance_lote(self, identificador):
-        lote = self.historial_lotes.obtener(identificador)
+        lote = self.historial_lotes.obtener(identificador, resumen=True)
         if lote is None:
             return
         self.progress['value'] = lote.progreso
-        estado = {'con_incidencias': 'Con incidencias', 'concluido': 'Concluido', 'detenido': 'Detenido'}.get(lote.estado, 'En proceso')
+        estado = {'con_incidencias': 'Con incidencias', 'concluido': 'Concluido', 'detenido': 'Detenido'}.get(
+            lote.estado, ETAPAS[lote.etapa],
+        )
         if lote.estado == 'en_proceso' and self._detencion_solicitada.is_set():
             estado = 'Deteniendo al terminar la ficha u operación en curso…'
         self.lbl_estado.config(text=f'{lote.id}: {lote.procesados}/{lote.total_objetivo} · {estado}')
@@ -1680,7 +1719,7 @@ class MigracionApp:
         self._actualizar_panel()
 
     def _finalizar_migracion(self):
-        self.migracion_en_curso = False
+        self.migracion_en_curso = self._preparando_lote = False
         self._actualizar_panel()
 
     def _exportar_marcxml(self, lote_id=None):

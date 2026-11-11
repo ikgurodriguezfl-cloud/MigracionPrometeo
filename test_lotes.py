@@ -28,6 +28,30 @@ class LotesTests(unittest.TestCase):
         self.assertEqual(self.historial.listar(), [])
         self.assertFalse(self.ruta.exists())
 
+    def test_avance_por_bloques_conserva_el_json_anterior_y_la_trazabilidad(self):
+        self.historial.recibir('anterior.mdb', 10)
+        anterior = self.ruta.read_bytes()
+        lote = self.historial.recibir('nuevo.mdb', 2, incremental=True)
+        self.historial.actualizar(lote.id, estado='en_proceso', etapa='conversion', usuario='ana')
+        fila = dict(id=6, referencia='Ficha 6', titulo='Historia',
+                    estado='Convertida', motivos=[])
+        with self.assertRaises(ValueError):
+            self.historial.actualizar(lote.id, filas=[fila], correctos=2)
+        self.assertEqual(self.historial.obtener(lote.id).procesados, 0)
+        self.historial.actualizar(lote.id, filas=[fila], correctos=1)
+        omitida = dict(id=7, referencia='Ficha 7', titulo='Crónica',
+                       estado='Omitida', motivos=['Ya existe.'])
+        self.historial.actualizar(lote.id, filas=[omitida], omitidos=1,
+                                  estado='concluido', etapa='finalizado')
+        recargado = HistorialLotes(self.ruta)
+        resumen = recargado.obtener(lote.id, resumen=True)
+        detalle = recargado.obtener(lote.id)
+        self.assertIsNone(resumen.resultados)
+        self.assertEqual(detalle.resultados, [fila, omitida])
+        self.assertEqual(detalle.fichas_correctas, [6])
+        self.assertEqual(detalle.usuario, 'ana')
+        self.assertEqual(self.ruta.read_bytes(), anterior)
+
     def test_historial_de_interfaz_institucional_conserva_detalle_y_usuario(self):
         lote = self.historial.recibir('copia.mdb', 2)
         self.historial.actualizar(lote.id, estado='concluido', etapa='finalizado',
