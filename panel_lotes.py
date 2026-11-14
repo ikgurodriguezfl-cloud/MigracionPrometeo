@@ -18,6 +18,18 @@ from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
 
 from lotes import ESTADOS, ETAPAS, lotes_de_ejemplo
+from ui_kit import (
+    FONDO, SUPERFICIE, SUPERFICIE_ALT, TEXTO, TEXTO_SECUNDARIO, TEXTO_MUTADO, TEXTO_INVERSO,
+    PRIMARIO, PRIMARIO_HOVER, PRIMARIO_SUAVE, BORDE, BORDE_ENFOQUE,
+    EXITO, EXITO_SUAVE, ADVERTENCIA, ADVERTENCIA_SUAVE, ERROR, ERROR_SUAVE, INFO, INFO_SUAVE,
+    FUENTE, FUENTE_MONO,
+    TAM_TITULO_PAGINA, TAM_SUBTITULO_PAGINA, TAM_TARJETA_TITULO,
+    TAM_CAMPO_ETIQUETA, TAM_CAMPO_ENTRADA, TAM_CUERPO, TAM_BOTON,
+    TAM_TABLA_ENCABEZADO, TAM_TABLA_CUERPO, TAM_METRICA_VALOR, TAM_METRICA_ETIQUETA,
+    ESPACIO_XS, ESPACIO_S, ESPACIO_M, ESPACIO_L, ESPACIO_XL,
+    instalar_estilos, tarjeta, seccion_tarjeta, encabezado_pagina, badge_estado,
+    separador, COLORES_ESTADO_LOTE,
+)
 
 
 def _celda_csv(valor):
@@ -436,93 +448,123 @@ class PanelLotes(ttk.Frame):
 
     def _estilos(self):
         estilo = ttk.Style(self)
-        estilo.configure('Panel.TFrame', background='#f7f5f2')
-        estilo.configure('Tarjeta.TFrame', background='#ffffff')
-        estilo.configure('Panel.TLabel', background='#f7f5f2', foreground='#777078', font=('Segoe UI', 9))
-        estilo.configure('Titulo.Panel.TLabel', background='#f7f5f2', foreground='#302a31', font=('Segoe UI', 19, 'bold'))
-        estilo.configure('Tarjeta.TLabel', background='#ffffff', foreground='#686168', font=('Segoe UI', 9))
-        estilo.configure('Nombre.TLabel', background='#ffffff', foreground='#302a31', font=('Segoe UI', 14, 'bold'))
-        estilo.configure('Numero.TLabel', background='#ffffff', foreground='#6d0c2e', font=('Segoe UI', 20, 'bold'))
-        estilo.configure('Lotes.Treeview', rowheight=36, font=('Segoe UI', 9),
-                         background='#ffffff', fieldbackground='#ffffff', foreground='#302a31')
-        estilo.configure('Lotes.Treeview.Heading', font=('Segoe UI', 9, 'bold'),
-                         background='#f7f5f2', foreground='#686168', padding=(8, 9))
-        estilo.map('Lotes.Treeview', background=[('selected', '#f3e8ec')],
-                   foreground=[('selected', '#6d0c2e')])
-        estilo.configure('Lotes.Horizontal.TProgressbar', background='#6d0c2e', troughcolor='#e8e2de',
-                         thickness=8)
-        estilo.configure('Estado.TLabel', background='#ffffff', foreground='#6d0c2e',
-                         font=('Segoe UI', 9, 'bold'))
+        estilo.configure('Panel.TFrame', background=FONDO)
+        estilo.configure('Tarjeta.TFrame', background=SUPERFICIE)
+        estilo.configure('Panel.TLabel', background=FONDO, foreground=TEXTO_SECUNDARIO,
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA))
+        estilo.configure('Titulo.Panel.TLabel', background=FONDO, foreground=TEXTO,
+                         font=(FUENTE, TAM_TITULO_PAGINA, 'bold'))
+        estilo.configure('Tarjeta.TLabel', background=SUPERFICIE, foreground=TEXTO_SECUNDARIO,
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA))
+        estilo.configure('CardBody.TLabel', background=SUPERFICIE, foreground=TEXTO,
+                         font=(FUENTE, TAM_CUERPO))
+        estilo.configure('CardHint.TLabel', background=SUPERFICIE, foreground=TEXTO_MUTADO,
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA))
+        estilo.configure('CardTitle.TLabel', background=SUPERFICIE, foreground=TEXTO,
+                         font=(FUENTE, TAM_TARJETA_TITULO, 'bold'))
+        estilo.configure('CardMetric.TLabel', background=SUPERFICIE, foreground=PRIMARIO,
+                         font=(FUENTE, 11, 'bold'))
+        estilo.configure('Nombre.TLabel', background=SUPERFICIE, foreground=TEXTO,
+                         font=(FUENTE, 15, 'bold'))
+        estilo.configure('Numero.TLabel', background=SUPERFICIE, foreground=PRIMARIO,
+                         font=(FUENTE, TAM_METRICA_VALOR, 'bold'))
+        estilo.configure('Lotes.Treeview', rowheight=36, font=(FUENTE, TAM_TABLA_CUERPO),
+                         background=SUPERFICIE, fieldbackground=SUPERFICIE, foreground=TEXTO,
+                         bordercolor=BORDE, lightcolor=BORDE, darkcolor=BORDE)
+        estilo.configure('Lotes.Treeview.Heading', background=SUPERFICIE_ALT,
+                         foreground=TEXTO_SECUNDARIO,
+                         font=(FUENTE, TAM_TABLA_ENCABEZADO, 'bold'), padding=(8, 9))
+        estilo.map('Lotes.Treeview', background=[('selected', PRIMARIO_SUAVE)],
+                   foreground=[('selected', PRIMARIO)])
+        estilo.configure('Lotes.Horizontal.TProgressbar', background=PRIMARIO,
+                         troughcolor=BORDE, thickness=8)
+        estilo.configure('Estado.TLabel', background=SUPERFICIE, foreground=PRIMARIO,
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'))
 
     def _crear(self):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
-        cabecera = ttk.Frame(self, style='Panel.TFrame')
-        cabecera.grid(row=0, column=0, sticky='ew', pady=(0, 4))
-        ttk.Label(cabecera, text='Lotes recientes', style='Titulo.Panel.TLabel').pack(side='left')
-        acciones_cabecera = ttk.Frame(cabecera, style='Panel.TFrame')
-        acciones_cabecera.pack(side='right')
+
+        # ---------- Cabecera ----------
+        cabecera = tarjeta(self, padding=(ESPACIO_M, ESPACIO_M))
+        cabecera.grid(row=0, column=0, sticky='ew', pady=(0, ESPACIO_S))
+        cabecera.columnconfigure(1, weight=1)
+        ttk.Label(
+            cabecera, text='Panel de migraciones', style='Titulo.Panel.TLabel',
+        ).grid(row=0, column=0, sticky='w')
+        ttk.Label(
+            cabecera, text='Estado general de los lotes y acciones rápidas.',
+            style='CardHint.TLabel',
+        ).grid(row=1, column=0, sticky='w', pady=(ESPACIO_XS, 0))
+        acciones_cabecera = ttk.Frame(cabecera, style='Tarjeta.TFrame')
+        acciones_cabecera.grid(row=0, column=1, rowspan=2, sticky='e')
         ttk.Button(
             acciones_cabecera, text='Actualizar', style='Quiet.TButton',
             command=self.actualizar,
-        ).pack(side='left', padx=(0, 6))
+        ).pack(side='left', padx=(0, ESPACIO_S))
         self.btn_exportar_historial = ttk.Button(
             acciones_cabecera, text='Exportar historial CSV',
             style='Secondary.TButton', command=self._exportar_historial,
         )
-        self.btn_exportar_historial.pack(side='left', padx=(0, 8))
+        self.btn_exportar_historial.pack(side='left', padx=(0, ESPACIO_S))
         self.btn_nueva_migracion = ttk.Button(
             acciones_cabecera, text='Nueva migración', style='Primary.TButton',
             command=self.conexiones,
         )
-        self.btn_nueva_migracion.pack(side='right')
+        self.btn_nueva_migracion.pack(side='left')
+
         self.aviso = ttk.Label(
             self, text='Selecciona un lote para ver su estado y las acciones disponibles.',
             style='Panel.TLabel',
         )
-        self.aviso.grid(row=1, column=0, sticky='ew', pady=(0, 12))
+        self.aviso.grid(row=1, column=0, sticky='ew', pady=(0, ESPACIO_M))
 
+        # ---------- Pestañas ----------
         self.vistas = ttk.Notebook(self)
         self.vistas.grid(row=2, column=0, sticky='nsew')
-        self.resumen = ttk.Frame(self.vistas, padding=(4, 12), style='Panel.TFrame')
-        self.historial_tab = ttk.Frame(self.vistas, padding=(4, 12), style='Panel.TFrame')
-        self.analisis_tab = ttk.Frame(self.vistas, padding=(4, 12), style='Panel.TFrame')
+        self.resumen = ttk.Frame(self.vistas, style='Panel.TFrame')
+        self.historial_tab = ttk.Frame(self.vistas, style='Panel.TFrame')
+        self.analisis_tab = ttk.Frame(self.vistas, style='Panel.TFrame')
         self.vistas.add(self.resumen, text='Resumen')
         self.vistas.add(self.historial_tab, text='Historial')
         self.vistas.add(self.analisis_tab, text='Análisis')
-        for indice in range(4):
-            self.resumen.columnconfigure(indice, weight=1, uniform='metricas')
-        self.resumen.rowconfigure(2, weight=1)
+
+        # -------- Pestaña: Resumen --------
+        self.resumen.columnconfigure(0, weight=1)
+        self.resumen.rowconfigure(3, weight=1)
         self.metricas = {}
+        metricas_frame = ttk.Frame(self.resumen, style='Panel.TFrame')
+        metricas_frame.grid(row=0, column=0, sticky='ew', pady=(0, ESPACIO_M))
+        for indice in range(4):
+            metricas_frame.columnconfigure(indice, weight=1, uniform='metricas')
         for indice, (clave, titulo) in enumerate((
             ('total_lotes', 'LOTES REGISTRADOS'),
             ('fichas_correctas', 'FICHAS CORRECTAS'),
             ('ejemplares', 'EJEMPLARES'),
             ('requieren_revision', 'REQUIEREN REVISIÓN'),
         )):
-            tarjeta = ttk.Frame(self.resumen, padding=(12, 8), style='Tarjeta.TFrame')
-            tarjeta.grid(row=0, column=indice, sticky='ew', padx=(0 if indice == 0 else 6, 6))
-            ttk.Label(tarjeta, text=titulo, style='Tarjeta.TLabel').pack(anchor='w')
-            valor = ttk.Label(tarjeta, text='0', style='Numero.TLabel')
-            valor.pack(anchor='w', pady=(2, 0))
+            tarjeta_m = tarjeta(metricas_frame, padding=(ESPACIO_M, ESPACIO_M))
+            tarjeta_m.grid(row=0, column=indice, sticky='ew', padx=(0 if indice == 0 else ESPACIO_S, ESPACIO_S))
+            ttk.Label(tarjeta_m, text=titulo, style='Tarjeta.TLabel').pack(anchor='w')
+            valor = ttk.Label(tarjeta_m, text='0', style='Numero.TLabel')
+            valor.pack(anchor='w', pady=(ESPACIO_XS, 0))
             self.metricas[clave] = valor
-        orientacion = ttk.LabelFrame(
-            self.resumen, text='  Lectura rápida  ', padding=(14, 10),
-        )
-        orientacion.grid(row=1, column=0, columnspan=4, sticky='ew', pady=(14, 0))
+
+        orientacion = seccion_tarjeta(self.resumen, 'Lectura rápida')
+        orientacion.grid(row=1, column=0, sticky='ew', pady=(0, ESPACIO_M))
+        orientacion.columnconfigure(0, weight=1)
         self.lbl_lectura_rapida = ttk.Label(
-            orientacion, style='Tarjeta.TLabel', wraplength=950, justify='left',
+            orientacion, style='CardBody.TLabel', wraplength=950, justify='left',
         )
-        self.lbl_lectura_rapida.pack(anchor='w', fill='x')
-        recientes = ttk.LabelFrame(
-            self.resumen, text='  Actividad reciente  ', padding=(14, 10),
-        )
-        recientes.grid(row=2, column=0, columnspan=4, sticky='nsew', pady=(12, 0))
+        self.lbl_lectura_rapida.pack(anchor='w', fill='x', padx=ESPACIO_M, pady=ESPACIO_M)
+
+        recientes = seccion_tarjeta(self.resumen, 'Actividad reciente')
+        recientes.grid(row=2, column=0, sticky='nsew', pady=(0, ESPACIO_M))
         recientes.columnconfigure(0, weight=1)
         recientes.rowconfigure(0, weight=1)
         self.lista_recientes = ttk.Treeview(
             recientes, columns=('estado', 'avance', 'fecha'),
-            show='tree headings', height=5, style='Lotes.Treeview',
+            show='tree headings', height=6, style='Lotes.Treeview',
         )
         self.lista_recientes.heading('#0', text='Lote / origen')
         self.lista_recientes.heading('estado', text='Estado')
@@ -540,11 +582,12 @@ class PanelLotes(ttk.Frame):
         self.lista_recientes.configure(yscrollcommand=recientes_scroll.set)
         self.lista_recientes.bind('<<TreeviewSelect>>', self._seleccionar_reciente)
 
+        # -------- Pestaña: Análisis --------
         self.analisis_tab.columnconfigure(0, weight=1)
         self.analisis_tab.rowconfigure(1, weight=1)
         barra_analisis = ttk.Frame(self.analisis_tab, style='Panel.TFrame')
-        barra_analisis.grid(row=0, column=0, sticky='ew', pady=(0, 10))
-        ttk.Label(barra_analisis, text='Visualizar', style='Panel.TLabel').pack(side='left', padx=(2, 8))
+        barra_analisis.grid(row=0, column=0, sticky='ew', pady=(0, ESPACIO_M))
+        ttk.Label(barra_analisis, text='Visualizar', style='Panel.TLabel').pack(side='left', padx=(ESPACIO_XS, ESPACIO_S))
         selector_grafico = ttk.Combobox(
             barra_analisis, textvariable=self.tipo_grafico,
             values=('Estado de los lotes', 'Resultado de fichas',
@@ -553,8 +596,8 @@ class PanelLotes(ttk.Frame):
         )
         selector_grafico.pack(side='left')
         selector_grafico.bind('<<ComboboxSelected>>', lambda _evento: self._pintar_grafico())
-        tarjeta_grafico = ttk.Frame(
-            self.analisis_tab, padding=(16, 14), style='Tarjeta.TFrame',
+        tarjeta_grafico = tarjeta(
+            self.analisis_tab, padding=(ESPACIO_M, ESPACIO_M),
         )
         tarjeta_grafico.grid(row=1, column=0, sticky='nsew')
         tarjeta_grafico.columnconfigure(0, weight=1)
@@ -562,32 +605,33 @@ class PanelLotes(ttk.Frame):
         self.lbl_titulo_grafico = ttk.Label(
             tarjeta_grafico, text='', style='Nombre.TLabel',
         )
-        self.lbl_titulo_grafico.grid(row=0, column=0, sticky='w', pady=(0, 4))
+        self.lbl_titulo_grafico.grid(row=0, column=0, sticky='w', pady=(0, ESPACIO_S))
         self.grafico = tk.Canvas(
-            tarjeta_grafico, background='#ffffff',
+            tarjeta_grafico, background=SUPERFICIE,
             highlightthickness=0, borderwidth=0,
         )
         self.grafico.grid(row=1, column=0, sticky='nsew')
         self.grafico.bind('<Configure>', lambda _evento: self._pintar_grafico())
 
+        # -------- Pestaña: Historial --------
         cuerpo = ttk.Panedwindow(self.historial_tab, orient='horizontal')
-        cuerpo.pack(fill='both', expand=True, pady=(0, 6))
-        listado = ttk.Frame(cuerpo, padding=12, style='Tarjeta.TFrame')
-        detalle = ttk.Frame(cuerpo, padding=18, style='Tarjeta.TFrame')
+        cuerpo.pack(fill='both', expand=True, pady=(0, ESPACIO_S))
+        listado = tarjeta(cuerpo, padding=ESPACIO_M)
+        detalle = tarjeta(cuerpo, padding=ESPACIO_M)
         cuerpo.add(listado, weight=3)
         cuerpo.add(detalle, weight=2)
         listado.columnconfigure(0, weight=1)
         listado.rowconfigure(2, weight=1)
         filtros = ttk.Frame(listado, style='Tarjeta.TFrame')
-        filtros.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 8))
-        ttk.Label(filtros, text='Estado', style='Tarjeta.TLabel').pack(side='left', padx=(0, 6))
+        filtros.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, ESPACIO_M))
+        ttk.Label(filtros, text='Estado', style='Tarjeta.TLabel').pack(side='left', padx=(0, ESPACIO_S))
         combo = ttk.Combobox(
             filtros, textvariable=self.filtro,
             values=['Todos'] + list(ESTADOS.values()), state='readonly', width=15,
         )
-        combo.pack(side='left', padx=(0, 10))
+        combo.pack(side='left', padx=(0, ESPACIO_M))
         combo.bind('<<ComboboxSelected>>', lambda _: self._pintar_tabla())
-        ttk.Label(filtros, text='Periodo', style='Tarjeta.TLabel').pack(side='left', padx=(0, 6))
+        ttk.Label(filtros, text='Periodo', style='Tarjeta.TLabel').pack(side='left', padx=(0, ESPACIO_S))
         combo_periodo = ttk.Combobox(
             filtros, textvariable=self.filtro_periodo,
             values=('Todo el historial', 'Últimos 7 días',
@@ -597,11 +641,11 @@ class PanelLotes(ttk.Frame):
         combo_periodo.pack(side='left')
         combo_periodo.bind('<<ComboboxSelected>>', lambda _: self._pintar_tabla())
         filtros_orden = ttk.Frame(listado, style='Tarjeta.TFrame')
-        filtros_orden.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(0, 8))
-        ttk.Label(filtros_orden, text='Buscar', style='Tarjeta.TLabel').pack(side='left', padx=(0, 6))
+        filtros_orden.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(0, ESPACIO_M))
+        ttk.Label(filtros_orden, text='Buscar', style='Tarjeta.TLabel').pack(side='left', padx=(0, ESPACIO_S))
         entrada = ttk.Entry(filtros_orden, textvariable=self.consulta)
-        entrada.pack(side='left', fill='x', expand=True, padx=(0, 10))
-        ttk.Label(filtros_orden, text='Ordenar', style='Tarjeta.TLabel').pack(side='left', padx=(0, 6))
+        entrada.pack(side='left', fill='x', expand=True, padx=(0, ESPACIO_M))
+        ttk.Label(filtros_orden, text='Ordenar', style='Tarjeta.TLabel').pack(side='left', padx=(0, ESPACIO_S))
         combo_orden = ttk.Combobox(
             filtros_orden, textvariable=self.orden,
             values=('Más recientes', 'Más antiguos', 'Más errores',
@@ -611,7 +655,10 @@ class PanelLotes(ttk.Frame):
         combo_orden.pack(side='left')
         combo_orden.bind('<<ComboboxSelected>>', lambda _: self._pintar_tabla())
         self.consulta.trace_add('write', lambda *_: self._pintar_tabla())
-        self.tabla = ttk.Treeview(listado, columns=('lote', 'estado', 'avance', 'total'), show='headings', selectmode='browse', style='Lotes.Treeview')
+        self.tabla = ttk.Treeview(
+            listado, columns=('lote', 'estado', 'avance', 'total'),
+            show='headings', selectmode='browse', style='Lotes.Treeview',
+        )
         for columna, titulo, ancho in (('lote', 'Lote / origen', 240), ('estado', 'Estado', 130), ('avance', 'Avance', 70), ('total', 'Recibidos', 75)):
             self.tabla.heading(columna, text=titulo)
             self.tabla.column(columna, width=ancho, minwidth=65, stretch=columna == 'lote', anchor='w')
@@ -621,42 +668,43 @@ class PanelLotes(ttk.Frame):
         horizontal = ttk.Scrollbar(listado, orient='horizontal', command=self.tabla.xview)
         horizontal.grid(row=3, column=0, sticky='ew')
         self.tabla.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
-        for estado, color in (('en_espera', '#777d91'), ('en_proceso', '#477bbb'), ('concluido', '#358265'), ('con_incidencias', '#a36d23'), ('detenido', '#956c42')):
-            self.tabla.tag_configure(estado, foreground=color)
+        for estado, config in COLORES_ESTADO_LOTE.items():
+            self.tabla.tag_configure(estado, foreground=config['texto'])
         self.tabla.bind('<<TreeviewSelect>>', self._seleccionar)
         self.sin_lotes = ttk.Label(listado, style='Tarjeta.TLabel', wraplength=430)
-        self.sin_lotes.grid(row=4, column=0, columnspan=2, sticky='ew', pady=(8, 0))
+        self.sin_lotes.grid(row=4, column=0, columnspan=2, sticky='ew', pady=(ESPACIO_M, 0))
 
+        # -------- Detalle del lote --------
         detalle.columnconfigure(0, weight=1)
         self.identificador = ttk.Label(detalle, style='Tarjeta.TLabel')
-        self.identificador.grid(row=0, column=0, sticky='w')
+        self.identificador.grid(row=0, column=0, sticky='w', pady=(0, ESPACIO_XS))
         self.nombre = ttk.Label(detalle, style='Nombre.TLabel', wraplength=340)
-        self.nombre.grid(row=1, column=0, sticky='ew', pady=(4, 8))
+        self.nombre.grid(row=1, column=0, sticky='ew', pady=(0, ESPACIO_M))
         self.estado = ttk.Label(detalle, style='Estado.TLabel')
-        self.estado.grid(row=2, column=0, sticky='ew')
+        self.estado.grid(row=2, column=0, sticky='ew', pady=(0, ESPACIO_M))
         self.etapa = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=345)
-        self.etapa.grid(row=3, column=0, sticky='ew', pady=(4, 8))
+        self.etapa.grid(row=3, column=0, sticky='ew', pady=(0, ESPACIO_M))
         self.barra = ttk.Progressbar(detalle, maximum=100, style='Lotes.Horizontal.TProgressbar')
-        self.barra.grid(row=4, column=0, sticky='ew')
+        self.barra.grid(row=4, column=0, sticky='ew', pady=(0, ESPACIO_M))
         self.conteos = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=350)
-        self.conteos.grid(row=5, column=0, sticky='ew', pady=(7, 6))
+        self.conteos.grid(row=5, column=0, sticky='ew', pady=(ESPACIO_S, ESPACIO_M))
         metricas = ttk.Frame(detalle, style='Tarjeta.TFrame')
-        metricas.grid(row=6, column=0, sticky='ew', pady=(0, 8))
+        metricas.grid(row=6, column=0, sticky='ew', pady=(0, ESPACIO_M))
         metricas.columnconfigure((0, 1), weight=1, uniform='metricas')
         self.metricas_lote = {}
         for indice, (campo, etiqueta) in enumerate((
             ('correctos', 'Convertidas'), ('omitidos', 'Ya existentes'),
             ('errores', 'Con error'), ('pendientes', 'Pendientes'),
         )):
-            tarjeta = tk.Frame(metricas, bg='#f7f5f2', padx=8, pady=4)
-            tarjeta.grid(row=indice // 2, column=indice % 2, sticky='ew', padx=(0, 4), pady=(0, 4))
-            tk.Label(tarjeta, text=etiqueta, bg='#f7f5f2', fg='#514950', font=('Segoe UI', 9)).pack(side='left')
-            valor = tk.Label(tarjeta, text='—', bg='#f7f5f2', fg='#302a31', font=('Segoe UI', 9, 'bold'))
+            tarjeta_m = tarjeta(metricas, padding=(ESPACIO_S, ESPACIO_S))
+            tarjeta_m.grid(row=indice // 2, column=indice % 2, sticky='ew', padx=(0, ESPACIO_S), pady=(0, ESPACIO_S))
+            ttk.Label(tarjeta_m, text=etiqueta, style='Tarjeta.TLabel').pack(side='left')
+            valor = ttk.Label(tarjeta_m, text='—', style='Numero.TLabel')
             valor.pack(side='right')
             self.metricas_lote[campo] = valor
 
         self.siguiente = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=350)
-        self.siguiente.grid(row=7, column=0, sticky='ew', pady=(0, 8))
+        self.siguiente.grid(row=7, column=0, sticky='ew', pady=(0, ESPACIO_M))
         acciones = ttk.Frame(detalle, style='Tarjeta.TFrame')
         acciones.grid(row=8, column=0, sticky='ew')
         acciones.columnconfigure((0, 1), weight=1, uniform='acciones')
@@ -671,14 +719,14 @@ class PanelLotes(ttk.Frame):
             self.btn_iniciar, self.btn_detener, self.btn_reprocesar, self.btn_exportar,
             self.btn_revisar, self.btn_incidencias,
         )):
-            boton.grid(row=indice // 2, column=indice % 2, sticky='ew', padx=(0, 4), pady=2)
-        self.btn_resumen.grid(row=3, column=0, columnspan=2, sticky='ew', padx=(0, 4), pady=2)
+            boton.grid(row=indice // 2, column=indice % 2, sticky='ew', padx=(0, ESPACIO_S), pady=ESPACIO_XS)
+        self.btn_resumen.grid(row=3, column=0, columnspan=2, sticky='ew', padx=(0, ESPACIO_S), pady=ESPACIO_XS)
         self.actualizado = ttk.Label(detalle, style='Tarjeta.TLabel')
-        self.actualizado.grid(row=9, column=0, sticky='ew', pady=(8, 0))
+        self.actualizado.grid(row=9, column=0, sticky='ew', pady=(ESPACIO_M, 0))
         ttk.Button(
             self.historial_tab, text='Ver actividad del lote', style='Quiet.TButton',
             command=self._actividad,
-        ).pack(anchor='e', pady=(2, 0))
+        ).pack(anchor='e', pady=(ESPACIO_S, 0))
 
     def _cambiar_modo(self):
         self.seleccionado = None

@@ -18,6 +18,21 @@ from panel_lotes import PanelLotes
 from permissions import (
     requerir_permiso, AccesoDenegado, tiene_permiso,
 )
+from ui_kit import (
+    FONDO, SUPERFICIE, TEXTO, TEXTO_SECUNDARIO, TEXTO_MUTADO, TEXTO_INVERSO,
+    PRIMARIO, PRIMARIO_HOVER, PRIMARIO_ACTIVO, PRIMARIO_SUAVE,
+    BARRA_LATERAL, BARRA_LATERAL_HOVER, BARRA_LATERAL_ACTIVA, BARRA_LATERAL_MUTADO,
+    BORDE, BORDE_ENFOQUE, EXITO, EXITO_SUAVE, ADVERTENCIA, ADVERTENCIA_SUAVE,
+    ERROR, ERROR_SUAVE, INFO, INFO_SUAVE,
+    FUENTE, FUENTE_MONO,
+    TAM_TITULO_PAGINA, TAM_SUBTITULO_PAGINA, TAM_TARJETA_TITULO,
+    TAM_CAMPO_ETIQUETA, TAM_CAMPO_ENTRADA, TAM_CUERPO, TAM_BOTON,
+    TAM_TABLA_ENCABEZADO, TAM_TABLA_CUERPO, TAM_METRICA_VALOR, TAM_METRICA_ETIQUETA,
+    ESPACIO_XS, ESPACIO_S, ESPACIO_M, ESPACIO_L, ESPACIO_XL,
+    instalar_estilos, tarjeta, seccion_tarjeta, campo_formulario,
+    encabezado_pagina, boton_accion, badge_estado, mensaje_estado, separador,
+    COLORES_ESTADO_LOTE,
+)
 
 
 class _DetencionSolicitada(Exception):
@@ -53,6 +68,10 @@ class MigracionApp:
         
         # Obtención del perfil para la matriz de permisos
         self.perfil_usuario = self.auth_service.get_profile(self.session_token) if self.auth_service else "Ejecucion"
+        self.usuario_nombre = (
+            self.auth_service.get_username(self.session_token)
+            if self.auth_service else "Usuario"
+        )
         
         self.root.title(
             f'NexoMARC | Migración Access a MARC21 (Koha) · '
@@ -123,30 +142,60 @@ class MigracionApp:
         sidebar.pack(side='left', fill='y')
         sidebar.pack_propagate(False)
 
-        marca = tk.Frame(sidebar, bg=self.COLORES['barra_lateral'])
-        marca.pack(fill='x', padx=18, pady=(24, 34))
+        # Marca
+        marca = tk.Frame(sidebar, bg=BARRA_LATERAL)
+        marca.pack(fill='x', padx=20, pady=(ESPACIO_L, ESPACIO_M))
         tk.Label(
             marca, text='N', width=2, height=1, bg='#ffffff',
-            fg=self.COLORES['guinda'], font=('Segoe UI', 17, 'bold'),
+            fg=PRIMARIO, font=(FUENTE, 19, 'bold'),
         ).pack(side='left', padx=(0, 10), ipady=3)
-        identidad = tk.Frame(marca, bg=self.COLORES['barra_lateral'])
+        identidad = tk.Frame(marca, bg=BARRA_LATERAL)
         identidad.pack(side='left')
         tk.Label(
-            identidad, text='NexoMARC', bg=self.COLORES['barra_lateral'],
-            fg='#ffffff', font=('Segoe UI', 11, 'bold'),
+            identidad, text='NexoMARC', bg=BARRA_LATERAL,
+            fg=TEXTO_INVERSO, font=(FUENTE, 12, 'bold'),
         ).pack(anchor='w')
-        tk.Label(
-            identidad, text='MIGRADOR', bg=self.COLORES['barra_lateral'],
-            fg=self.COLORES['barra_lateral_muted'], font=('Segoe UI', 8, 'bold'),
-        ).pack(anchor='w', pady=(2, 0))
+
+        separador(sidebar, pady=ESPACIO_M, padx=20)
 
         tk.Label(
-            sidebar, text='MIGRACIÓN', bg=self.COLORES['barra_lateral'],
-            fg=self.COLORES['barra_lateral_muted'], font=('Segoe UI', 8, 'bold'),
-        ).pack(anchor='w', padx=20, pady=(0, 8))
+            sidebar, text='MIGRACIÓN', bg=BARRA_LATERAL,
+            fg=BARRA_LATERAL_MUTADO, font=(FUENTE, 7, 'bold'),
+        ).pack(anchor='w', padx=20, pady=(ESPACIO_S, ESPACIO_S))
 
         area = ttk.Frame(distribucion, style='App.TFrame')
         area.pack(side='left', fill='both', expand=True)
+
+        # ---------- Encabezado de sesion (dashboard derecho) ----------
+        encabezado_sesion = tarjeta(area, padding=(ESPACIO_M, ESPACIO_M))
+        encabezado_sesion.pack(fill='x', padx=ESPACIO_L, pady=(ESPACIO_L, ESPACIO_S))
+        encabezado_sesion.columnconfigure(1, weight=1)
+        tk.Label(
+            encabezado_sesion, text='USUARIO', bg=SUPERFICIE,
+            fg=TEXTO_SECUNDARIO, font=(FUENTE, 7, 'bold'),
+        ).grid(row=0, column=0, sticky='w')
+        self.lbl_usuario_sesion = tk.Label(
+            encabezado_sesion, text=self.usuario_nombre,
+            bg=SUPERFICIE, fg=TEXTO, font=(FUENTE, 13, 'bold'),
+        )
+        self.lbl_usuario_sesion.grid(row=1, column=0, sticky='w', pady=(ESPACIO_XS, 0))
+        tk.Label(
+            encabezado_sesion, text='ROL', bg=SUPERFICIE,
+            fg=TEXTO_SECUNDARIO, font=(FUENTE, 7, 'bold'),
+        ).grid(row=0, column=1, sticky='e')
+        self.lbl_rol_sesion = tk.Label(
+            encabezado_sesion, text=self.perfil_usuario,
+            bg=SUPERFICIE, fg=PRIMARIO, font=(FUENTE, 13, 'bold'),
+        )
+        self.lbl_rol_sesion.grid(row=1, column=1, sticky='e')
+        tk.Frame(
+            encabezado_sesion, bg=BORDE, height=1,
+        ).grid(row=2, column=0, columnspan=2, sticky='ew', pady=(ESPACIO_M, 0))
+        tk.Label(
+            encabezado_sesion, text='SESION ACTIVA', bg=SUPERFICIE,
+            fg=EXITO, font=(FUENTE, 8, 'bold'),
+        ).grid(row=3, column=0, columnspan=2, sticky='w', pady=(ESPACIO_S, 0))
+
         self.page_container = ttk.Frame(area, style='App.TFrame')
         self.page_container.pack(fill='both', expand=True)
         self.page_container.columnconfigure(0, weight=1)
@@ -183,47 +232,38 @@ class MigracionApp:
 
         self._nav_items = {}
         self._crear_boton_navegacion(sidebar, 'Inicio', self.panel_lotes)
-        ttk.Separator(sidebar, orient='horizontal').pack(fill='x', padx=18, pady=14)
+        separador(sidebar, pady=ESPACIO_M, padx=20)
         self._crear_boton_navegacion(sidebar, '1   Conexión', self.frame_conexion)
         self._crear_boton_navegacion(sidebar, '2   Configuración', self.frame_config)
         self._crear_boton_navegacion(sidebar, '3   Migración', self.frame_migracion)
 
         tk.Label(
-            sidebar, text='SISTEMA', bg=self.COLORES['barra_lateral'],
-            fg=self.COLORES['barra_lateral_muted'], font=('Segoe UI', 8, 'bold'),
-        ).pack(anchor='w', padx=20, pady=(26, 8))
+            sidebar, text='SISTEMA', bg=BARRA_LATERAL,
+            fg=BARRA_LATERAL_MUTADO, font=(FUENTE, 7, 'bold'),
+        ).pack(anchor='w', padx=20, pady=(ESPACIO_L, ESPACIO_S))
         self._crear_boton_navegacion(sidebar, 'Actividad', self.frame_log)
 
-        pie = tk.Frame(sidebar, bg=self.COLORES['barra_lateral'])
-        pie.pack(side='bottom', fill='x', padx=20, pady=20)
-        tk.Frame(pie, bg=self.COLORES['barra_lateral_hover'], height=1).pack(fill='x', pady=(0, 14))
-        tk.Label(
-            pie, text='Sesión activa', bg=self.COLORES['barra_lateral'],
-            fg=self.COLORES['barra_lateral_muted'], font=('Segoe UI', 8),
-        ).pack(anchor='w')
-        tk.Label(
-            pie, text=self.perfil_usuario, bg=self.COLORES['barra_lateral'],
-            fg='#ffffff', font=('Segoe UI', 10, 'bold'),
-        ).pack(anchor='w', pady=(3, 0))
+        # ---------- Pie de barra lateral ----------
+        pie = tk.Frame(sidebar, bg=BARRA_LATERAL)
+        pie.pack(side='bottom', fill='x', padx=20, pady=ESPACIO_L)
+        tk.Frame(pie, bg=BARRA_LATERAL_HOVER, height=1).pack(fill='x', pady=(0, ESPACIO_M))
         if tiene_permiso(self.perfil_usuario, 'gestionar_usuarios'):
             tk.Button(
                 pie, text='Crear usuario', command=self._abrir_registro_usuario,
-                anchor='w', padx=0, pady=8, bd=0, relief='flat',
-                cursor='hand2', font=('Segoe UI', 9),
-                bg=self.COLORES['barra_lateral'],
-                fg=self.COLORES['barra_lateral_muted'],
-                activebackground=self.COLORES['barra_lateral_hover'],
-                activeforeground='#ffffff', highlightthickness=0,
-            ).pack(anchor='w', pady=(8, 0))
+                anchor='w', padx=0, pady=ESPACIO_S, bd=0, relief='flat',
+                cursor='hand2', font=(FUENTE, 9),
+                bg=BARRA_LATERAL, fg=BARRA_LATERAL_MUTADO,
+                activebackground=BARRA_LATERAL_HOVER,
+                activeforeground=TEXTO_INVERSO, highlightthickness=0,
+            ).pack(anchor='w', pady=(0, ESPACIO_S))
         tk.Button(
             pie, text='Cerrar sesión', command=self._cerrar_sesion,
-            anchor='w', padx=0, pady=8, bd=0, relief='flat',
-            cursor='hand2', font=('Segoe UI', 9),
-            bg=self.COLORES['barra_lateral'],
-            fg=self.COLORES['barra_lateral_muted'],
-            activebackground=self.COLORES['barra_lateral_hover'],
-            activeforeground='#ffffff', highlightthickness=0,
-        ).pack(anchor='w', pady=(8, 0))
+            anchor='w', padx=0, pady=ESPACIO_S, bd=0, relief='flat',
+            cursor='hand2', font=(FUENTE, 9),
+            bg=BARRA_LATERAL, fg=BARRA_LATERAL_MUTADO,
+            activebackground=BARRA_LATERAL_HOVER,
+            activeforeground=TEXTO_INVERSO, highlightthickness=0,
+        ).pack(anchor='w')
 
         self._crear_pestana_conexion()
         self._crear_pestana_migracion()
@@ -242,68 +282,125 @@ class MigracionApp:
             command=lambda destino=pantalla: self._navegar(destino),
             anchor='w',
             padx=18,
-            pady=11,
+            pady=ESPACIO_M,
             bd=0,
             relief='flat',
             cursor='hand2',
-            font=('Segoe UI', 10),
-            bg=self.COLORES['barra_lateral'],
-            fg='#f7f2f4',
-            activebackground=self.COLORES['barra_lateral_hover'],
-            activeforeground='#ffffff',
-            disabledforeground='#988b92',
+            font=(FUENTE, TAM_BOTON),
+            bg=BARRA_LATERAL,
+            fg='#e8dce1',
+            activebackground=BARRA_LATERAL_HOVER,
+            activeforeground=TEXTO_INVERSO,
+            disabledforeground=BARRA_LATERAL_MUTADO,
             highlightthickness=0,
         )
-        boton.pack(fill='x', padx=10, pady=2)
+        boton.pack(fill='x', padx=10, pady=ESPACIO_XS)
         self._nav_items[pantalla] = boton
 
     def _estilos_interfaz(self):
+        # Instala el sistema de diseno centralizado y devuelve el estilo para
+        # referencias rapidas si fuera necesario.
+        instalar_estilos(self.root)
+        # Sobrescrituras puntuales de la app principal (mantienen compatibilidad
+        # con nombres de estilo ya usados en el resto del codigo).
         estilo = ttk.Style(self.root)
-        estilo.theme_use('clam')
         colores = self.COLORES
-        estilo.configure('.', font=('Segoe UI', 10), foreground=colores['texto'])
-        estilo.configure('App.TFrame', background=colores['fondo'])
-        estilo.configure('TFrame', background=colores['fondo'])
-        estilo.configure('TLabel', background=colores['fondo'], foreground=colores['texto'])
-        estilo.configure('AppTitle.TLabel', background=colores['fondo'],
-                         foreground=colores['texto'], font=('Segoe UI', 17, 'bold'))
-        estilo.configure('PageTitle.TLabel', background=colores['fondo'],
-                         foreground=colores['texto'], font=('Segoe UI', 18, 'bold'))
-        estilo.configure('PageSubtitle.TLabel', background=colores['fondo'],
-                         foreground=colores['texto_secundario'], font=('Segoe UI', 10))
-        estilo.configure('Card.TFrame', background=colores['superficie'])
-        estilo.configure('CardHint.TLabel', background=colores['superficie'],
-                         foreground=colores['texto_secundario'], font=('Segoe UI', 9))
-        estilo.configure('CardBody.TLabel', background=colores['superficie'],
-                         foreground=colores['texto'], font=('Segoe UI', 10))
-        estilo.configure('CardMetric.TLabel', background=colores['superficie'],
-                         foreground=colores['guinda'], font=('Segoe UI', 11, 'bold'))
-        estilo.configure('CardTitle.TLabel', background=colores['superficie'],
-                         foreground=colores['texto'], font=('Segoe UI', 12, 'bold'))
-        estilo.configure('Field.TLabel', background=colores['superficie'],
-                         foreground=colores['texto_secundario'], font=('Segoe UI', 9, 'bold'))
-        estilo.configure('TLabelframe', background=colores['superficie'],
-                         bordercolor=colores['borde'], relief='solid', borderwidth=1)
-        estilo.configure('TLabelframe.Label', background=colores['superficie'],
-                         foreground=colores['texto'], font=('Segoe UI', 10, 'bold'))
-        estilo.configure('TEntry', fieldbackground=colores['superficie'],
-                         foreground=colores['texto'], padding=(8, 7))
-        estilo.configure('TButton', padding=(12, 8), font=('Segoe UI', 9, 'bold'))
-        estilo.configure('Primary.TButton', background=colores['guinda'],
-                         foreground='#ffffff', bordercolor=colores['guinda'])
+        estilo.configure('App.TFrame', background=FONDO)
+        estilo.configure('Panel.TFrame', background=FONDO)
+        estilo.configure('Tarjeta.TFrame', background=SUPERFICIE)
+        estilo.configure('TLabel', background=FONDO, foreground=TEXTO)
+        estilo.configure('Tarjeta.TLabel', background=SUPERFICIE, foreground=TEXTO_SECUNDARIO,
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA))
+        estilo.configure('CardBody.TLabel', background=SUPERFICIE, foreground=TEXTO,
+                         font=(FUENTE, TAM_CUERPO))
+        estilo.configure('CardHint.TLabel', background=SUPERFICIE, foreground=TEXTO_MUTADO,
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA))
+        estilo.configure('CardTitle.TLabel', background=SUPERFICIE, foreground=TEXTO,
+                         font=(FUENTE, TAM_TARJETA_TITULO, 'bold'))
+        estilo.configure('CardMetric.TLabel', background=SUPERFICIE, foreground=PRIMARIO,
+                         font=(FUENTE, 11, 'bold'))
+        estilo.configure('Field.TLabel', background=SUPERFICIE, foreground=TEXTO_SECUNDARIO,
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'))
+        estilo.configure('AppTitle.TLabel', background=FONDO, foreground=TEXTO,
+                         font=(FUENTE, TAM_TITULO_PAGINA, 'bold'))
+        estilo.configure('PageTitle.TLabel', background=FONDO, foreground=TEXTO,
+                         font=(FUENTE, TAM_TITULO_PAGINA, 'bold'))
+        estilo.configure('PageSubtitle.TLabel', background=FONDO, foreground=TEXTO_SECUNDARIO,
+                         font=(FUENTE, TAM_SUBTITULO_PAGINA))
+        estilo.configure('TEntry', fieldbackground=SUPERFICIE, foreground=TEXTO,
+                         bordercolor=BORDE, lightcolor=BORDE_ENFOQUE, darkcolor=BORDE_ENFOQUE,
+                         padding=(8, 7), font=(FUENTE, TAM_CAMPO_ENTRADA))
+        estilo.map('TEntry', bordercolor=[('focus', BORDE_ENFOQUE), ('!focus', BORDE)])
+        estilo.configure('TButton', font=(FUENTE, TAM_BOTON, 'bold'), padding=(12, 8),
+                         background=SUPERFICIE, foreground=TEXTO, bordercolor=BORDE)
+        estilo.map('TButton',
+                   background=[('active', SUPERFICIE), ('disabled', '#f1eeec')],
+                   foreground=[('disabled', TEXTO_MUTADO)])
+        estilo.configure('Primary.TButton', background=PRIMARIO, foreground=TEXTO_INVERSO,
+                         bordercolor=PRIMARIO)
         estilo.map('Primary.TButton',
-                   background=[('active', colores['guinda_hover']), ('disabled', '#c8b7bd')],
-                   foreground=[('disabled', '#ffffff')])
-        estilo.configure('Secondary.TButton', background=colores['superficie'],
-                         foreground=colores['guinda'], bordercolor=colores['borde'])
-        estilo.map('Secondary.TButton', background=[('active', colores['guinda_suave'])])
-        estilo.configure('Quiet.TButton', background=colores['fondo'],
-                         foreground=colores['texto_secundario'], borderwidth=0)
-        estilo.map('Quiet.TButton', foreground=[('active', colores['guinda'])])
-        estilo.configure('Horizontal.TProgressbar', troughcolor=colores['borde'],
-                         background=colores['guinda'], thickness=8, borderwidth=0)
-        estilo.configure('TCheckbutton', background=colores['superficie'],
-                         foreground=colores['texto'])
+                   background=[('active', PRIMARIO_HOVER), ('pressed', PRIMARIO_ACTIVO),
+                               ('disabled', '#c8b7bd')],
+                   foreground=[('disabled', TEXTO_MUTADO)])
+        estilo.configure('Secondary.TButton', background=PRIMARIO_SUAVE, foreground=PRIMARIO,
+                         bordercolor=BORDE)
+        estilo.map('Secondary.TButton',
+                   background=[('active', PRIMARIO), ('pressed', PRIMARIO_ACTIVO)],
+                   foreground=[('active', TEXTO_INVERSO), ('pressed', TEXTO_INVERSO)])
+        estilo.configure('Quiet.TButton', background=FONDO, foreground=TEXTO_SECUNDARIO,
+                         borderwidth=0, padding=(8, 6))
+        estilo.map('Quiet.TButton', foreground=[('active', PRIMARIO)])
+        estilo.configure('Peligro.TButton', background=ERROR, foreground=TEXTO_INVERSO,
+                         bordercolor=ERROR)
+        estilo.map('Peligro.TButton',
+                   background=[('active', '#b55a3c'), ('pressed', '#8c5338')],
+                   foreground=[('disabled', TEXTO_MUTADO)])
+        estilo.configure('TSeparator', background=BORDE)
+        estilo.configure('Horizontal.TProgressbar', troughcolor=BORDE, background=PRIMARIO,
+                         thickness=8, borderwidth=0)
+        estilo.configure('TCheckbutton', background=FONDO, foreground=TEXTO,
+                         font=(FUENTE, TAM_CUERPO))
+        estilo.configure('TLabelframe', background=SUPERFICIE, bordercolor=BORDE,
+                         relief='solid', borderwidth=1)
+        estilo.configure('TLabelframe.Label', background=SUPERFICIE, foreground=TEXTO,
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'))
+        estilo.configure('TNotebook', background=FONDO, borderwidth=0)
+        estilo.configure('TNotebook.Tab', background='#f1eeec', foreground=TEXTO_SECUNDARIO,
+                         font=(FUENTE, TAM_BOTON, 'bold'), padding=(16, 10), borderwidth=0)
+        estilo.map('TNotebook.Tab',
+                   background=[('selected', SUPERFICIE), ('active', SUPERFICIE)],
+                   foreground=[('selected', TEXTO), ('active', TEXTO)])
+        estilo.configure('Lotes.Treeview', background=SUPERFICIE, fieldbackground=SUPERFICIE,
+                         foreground=TEXTO, rowheight=34, font=(FUENTE, TAM_TABLA_CUERPO),
+                         bordercolor=BORDE, lightcolor=BORDE, darkcolor=BORDE)
+        estilo.configure('Lotes.Treeview.Heading', background='#f1eeec',
+                         foreground=TEXTO_SECUNDARIO, font=(FUENTE, TAM_TABLA_ENCABEZADO, 'bold'),
+                         padding=(8, 9))
+        estilo.map('Lotes.Treeview',
+                   background=[('selected', PRIMARIO_SUAVE)],
+                   foreground=[('selected', PRIMARIO)])
+        estilo.configure('Lotes.Horizontal.TProgressbar', background=PRIMARIO,
+                         troughcolor=BORDE, thickness=8)
+        estilo.configure('Estado.TLabel', background=SUPERFICIE, foreground=PRIMARIO,
+                         font=(FUENTE, 9, 'bold'))
+        # COLORES se conserva por compatibilidad con el resto de la clase.
+        self.COLORES = {
+            'fondo': FONDO,
+            'superficie': SUPERFICIE,
+            'texto': TEXTO,
+            'texto_secundario': TEXTO_SECUNDARIO,
+            'borde': BORDE,
+            'guinda': PRIMARIO,
+            'guinda_hover': PRIMARIO_HOVER,
+            'guinda_suave': PRIMARIO_SUAVE,
+            'barra_lateral': BARRA_LATERAL,
+            'barra_lateral_hover': BARRA_LATERAL_HOVER,
+            'barra_lateral_activa': BARRA_LATERAL_ACTIVA,
+            'barra_lateral_muted': BARRA_LATERAL_MUTADO,
+            'verde': EXITO,
+            'verde_suave': EXITO_SUAVE,
+            'tierra': ADVERTENCIA,
+        }
     def _navegar(self, pantalla):
         if not self._pagina_autorizada(pantalla):
             messagebox.showerror(
@@ -448,17 +545,12 @@ class MigracionApp:
         entry.grid(row=fila, column=col*2+1, sticky='ew', padx=(0, 14), pady=7)
         return var
 
-    @staticmethod
-    def _encabezado_pagina(parent, titulo, descripcion):
-        ttk.Label(parent, text=titulo, style='PageTitle.TLabel').pack(anchor='w')
-        ttk.Label(
-            parent, text=descripcion, style='PageSubtitle.TLabel',
-            wraplength=950,
-        ).pack(anchor='w', pady=(4, 18))
+    def _encabezado_pagina(self, parent, titulo, descripcion):
+        return encabezado_pagina(parent, titulo, descripcion)
 
     def _crear_pestana_conexion(self):
         f = self.frame_conexion
-        f.configure(padding=(22, 18, 22, 20))
+        f.configure(padding=(ESPACIO_L, ESPACIO_M, ESPACIO_L, ESPACIO_XL))
         self._encabezado_pagina(
             f, 'Conecta tus datos',
             'Selecciona el respaldo de Access y valida el destino MySQL antes de continuar.',
@@ -467,18 +559,18 @@ class MigracionApp:
         tarjetas.pack(fill='both', expand=True)
         tarjetas.columnconfigure(0, weight=1, uniform='conexion')
         tarjetas.columnconfigure(1, weight=1, uniform='conexion')
-        lbl_access = ttk.LabelFrame(
-            tarjetas, text='  01 · ORIGEN ACCESS  ', padding=(18, 14),
-        )
-        lbl_access.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
+
+        lbl_access = seccion_tarjeta(tarjetas, '01 · ORIGEN ACCESS')
+        lbl_access.grid(row=0, column=0, sticky='nsew', padx=(0, ESPACIO_S))
+        lbl_access.columnconfigure(0, weight=1)
 
         self.var_access_path = tk.StringVar(value=self.config.get('access', {}).get('path', ''))
         self.var_access_path.trace_add('write', lambda *_: self._actualizar_info_access())
-        fila_archivo = ttk.Frame(lbl_access)
-        fila_archivo.pack(fill='x', pady=(2, 12))
+        fila_archivo = ttk.Frame(lbl_access, style='Tarjeta.TFrame')
+        fila_archivo.pack(fill='x', pady=(ESPACIO_S, ESPACIO_M))
         fila_archivo.columnconfigure(0, weight=1)
         ttk.Entry(fila_archivo, textvariable=self.var_access_path).grid(
-            row=0, column=0, sticky='ew', padx=(0, 8)
+            row=0, column=0, sticky='ew', padx=(0, ESPACIO_S)
         )
         ttk.Button(
             fila_archivo, text='Examinar…', style='Secondary.TButton',
@@ -489,27 +581,25 @@ class MigracionApp:
         ttk.Label(
             lbl_access, text='El archivo se abrirá en modo de solo lectura.',
             style='CardHint.TLabel',
-        ).pack(anchor='w', pady=(0, 14))
+        ).pack(anchor='w', pady=(0, ESPACIO_M))
         self.lbl_info_access = ttk.Label(
             lbl_access, text='Archivo seleccionado: --', anchor='w',
             style='CardBody.TLabel', wraplength=430,
         )
-        self.lbl_info_access.pack(fill='x', pady=(0, 12))
+        self.lbl_info_access.pack(fill='x', pady=(0, ESPACIO_M))
         self.lbl_conteo_access = ttk.Label(
             lbl_access, text='Registros FICHAS: pendientes de validar',
             style='CardMetric.TLabel',
         )
-        self.lbl_conteo_access.pack(anchor='w', pady=(0, 14))
+        self.lbl_conteo_access.pack(anchor='w', pady=(0, ESPACIO_M))
         ttk.Button(
             lbl_access, text='Validar conexión Access', style='Primary.TButton',
             command=self._probar_access,
-        ).pack(anchor='w')
+        ).pack(anchor='w', pady=(0, ESPACIO_S))
         self._actualizar_info_access()
 
-        lbl_mysql = ttk.LabelFrame(
-            tarjetas, text='  02 · DESTINO MYSQL  ', padding=(18, 14),
-        )
-        lbl_mysql.grid(row=0, column=1, sticky='nsew', padx=(10, 0))
+        lbl_mysql = seccion_tarjeta(tarjetas, '02 · DESTINO MYSQL')
+        lbl_mysql.grid(row=0, column=1, sticky='nsew', padx=(ESPACIO_S, 0))
         lbl_mysql.columnconfigure(1, weight=1)
         lbl_mysql.columnconfigure(3, weight=1)
 
@@ -521,7 +611,7 @@ class MigracionApp:
         ttk.Label(
             lbl_mysql, text='Aquí se guardarán los registros MARC21 y los ejemplares.',
             style='CardHint.TLabel',
-        ).grid(row=3, column=0, columnspan=4, sticky='w', padx=4, pady=(4, 14))
+        ).grid(row=3, column=0, columnspan=4, sticky='w', padx=4, pady=(ESPACIO_S, ESPACIO_M))
         ttk.Button(
             lbl_mysql, text='Validar conexión MySQL', style='Secondary.TButton',
             command=self._probar_mysql,
@@ -531,73 +621,71 @@ class MigracionApp:
         )
         self.lbl_conteo_mysql.grid(row=4, column=1, columnspan=3, sticky='w', padx=10)
 
+        acciones = ttk.Frame(f, style='App.TFrame')
+        acciones.pack(fill='x', pady=(ESPACIO_M, 0))
         self.btn_siguiente_config = ttk.Button(
-            f, text='Siguiente: configuración  →', style='Primary.TButton',
+            acciones, text='Siguiente: configuración  →', style='Primary.TButton',
             command=self._continuar_a_configuracion, state='disabled',
         )
-        self.btn_siguiente_config.pack(anchor='e', pady=(16, 0))
+        self.btn_siguiente_config.pack(anchor='e')
 
     def _crear_pestana_migracion(self):
         f = self.frame_migracion
-        f.configure(padding=(22, 18, 22, 20))
+        f.configure(padding=(ESPACIO_L, ESPACIO_M, ESPACIO_L, ESPACIO_XL))
         self._encabezado_pagina(
             f, 'Ejecuta la migración',
             'El proceso conserva avances por lote. Los valores no contemplados se registran como incidencias; no se infieren correspondencias.',
         )
 
-        lbl_opts = ttk.LabelFrame(
-            f, text='  ALCANCE DEL PROCESO  ', padding=(18, 12),
-        )
-        lbl_opts.pack(fill='x', pady=(0, 14))
+        lbl_opts = seccion_tarjeta(f, 'ALCANCE DEL PROCESO')
+        lbl_opts.pack(fill='x', pady=(0, ESPACIO_M))
 
         self.var_limite = tk.StringVar(value='0')
         ttk.Label(
             lbl_opts, text='Cantidad de fichas', style='Field.TLabel',
-        ).pack(side='left', padx=(2, 8))
-        ttk.Entry(lbl_opts, textvariable=self.var_limite, width=12).pack(side='left', padx=(0, 8))
+        ).pack(side='left', padx=(ESPACIO_XS, ESPACIO_S))
+        ttk.Entry(lbl_opts, textvariable=self.var_limite, width=12).pack(side='left', padx=(0, ESPACIO_S))
         ttk.Label(
             lbl_opts, text='0 = procesar todas las fichas del respaldo',
             style='CardHint.TLabel',
-        ).pack(side='left', padx=(0, 24))
+        ).pack(side='left', padx=(0, ESPACIO_L))
 
         self.var_saltar_existentes = tk.BooleanVar(value=True)
         ttk.Checkbutton(lbl_opts, text='Saltar registros ya migrados',
                         variable=self.var_saltar_existentes).pack(side='left')
 
-        lbl_prog = ttk.LabelFrame(
-            f, text='  ESTADO DE LA EJECUCIÓN  ', padding=(20, 18),
-        )
+        lbl_prog = seccion_tarjeta(f, 'ESTADO DE LA EJECUCIÓN')
         lbl_prog.pack(fill='both', expand=True)
         lbl_prog.columnconfigure(0, weight=1)
         ttk.Label(
             lbl_prog, text='Conversión Access → MARC21 → MySQL',
             style='CardTitle.TLabel',
-        ).grid(row=0, column=0, sticky='w', pady=(0, 5))
+        ).grid(row=0, column=0, sticky='w', pady=(0, ESPACIO_XS))
         ttk.Label(
             lbl_prog, text='Puedes detener el proceso de forma segura; se conservarán las fichas ya guardadas.',
             style='CardHint.TLabel',
-        ).grid(row=1, column=0, sticky='w', pady=(0, 20))
+        ).grid(row=1, column=0, sticky='w', pady=(0, ESPACIO_M))
 
         self.progress = ttk.Progressbar(lbl_prog, orient='horizontal', mode='determinate')
-        self.progress.grid(row=2, column=0, sticky='ew', pady=(0, 10))
+        self.progress.grid(row=2, column=0, sticky='ew', pady=(0, ESPACIO_M))
 
         self.lbl_estado = ttk.Label(lbl_prog, text='Listo para iniciar.', style='CardMetric.TLabel')
-        self.lbl_estado.grid(row=3, column=0, sticky='w', pady=(0, 6))
+        self.lbl_estado.grid(row=3, column=0, sticky='w', pady=(0, ESPACIO_S))
 
         self.lbl_stats = ttk.Label(lbl_prog, text='Correctos: 0  ·  Omitidos: 0  ·  Errores: 0')
         self.lbl_stats.grid(row=4, column=0, sticky='w')
         btn_frame = ttk.Frame(lbl_prog, style='App.TFrame')
-        btn_frame.grid(row=5, column=0, sticky='ew', pady=(24, 0))
+        btn_frame.grid(row=5, column=0, sticky='ew', pady=(ESPACIO_L, 0))
         self.btn_ejecutar = ttk.Button(
             btn_frame, text='Iniciar migración', style='Primary.TButton',
             command=self._iniciar_migracion,
         )
-        self.btn_ejecutar.pack(side='left', padx=(0, 8))
+        self.btn_ejecutar.pack(side='left', padx=(0, ESPACIO_S))
         self.btn_detener = ttk.Button(
             btn_frame, text='Detener con seguridad', style='Secondary.TButton',
             command=self._solicitar_detencion, state='disabled',
         )
-        self.btn_detener.pack(side='left', padx=(0, 8))
+        self.btn_detener.pack(side='left', padx=(0, ESPACIO_S))
         self.btn_exportar = ttk.Button(
             btn_frame, text='Exportar MARCXML', style='Secondary.TButton',
             command=self._exportar_marcxml,
@@ -606,7 +694,7 @@ class MigracionApp:
 
     def _crear_pestana_config(self):
         f = self.frame_config
-        f.configure(padding=(22, 18, 22, 20))
+        f.configure(padding=(ESPACIO_L, ESPACIO_M, ESPACIO_L, ESPACIO_XL))
         self._encabezado_pagina(
             f, 'Revisa la configuración',
             'Define equivalencias explícitas para Koha. Si un valor no tiene regla autorizada, se omitirá y quedará señalado en las incidencias.',
@@ -616,22 +704,21 @@ class MigracionApp:
         tarjetas.columnconfigure(0, weight=1, uniform='mapeos')
         tarjetas.columnconfigure(1, weight=1, uniform='mapeos')
 
-        lbl_map = ttk.LabelFrame(
-            tarjetas, text='  SUCURSALES · ACCESS → KOHA  ', padding=(14, 12),
-        )
-        lbl_map.grid(row=0, column=0, sticky='nsew', padx=(0, 8))
+        lbl_map = seccion_tarjeta(tarjetas, 'SUCURSALES · ACCESS → KOHA')
+        lbl_map.grid(row=0, column=0, sticky='nsew', padx=(0, ESPACIO_S))
+        lbl_map.columnconfigure(0, weight=1)
         ttk.Label(
             lbl_map, text='Código de biblioteca a código de sucursal.',
             style='CardHint.TLabel',
-        ).pack(anchor='w', pady=(0, 8))
-        txt_frame = ttk.Frame(lbl_map, style='Card.TFrame')
+        ).pack(anchor='w', pady=(0, ESPACIO_M))
+        txt_frame = ttk.Frame(lbl_map, style='Tarjeta.TFrame')
         txt_frame.pack(fill='both', expand=True)
         self.txt_mapeo = tk.Text(
             txt_frame, width=42, height=8, wrap='none',
-            font=('Consolas', 10), bg='#fbfaf9', fg=self.COLORES['texto'],
-            insertbackground=self.COLORES['guinda'], relief='flat',
-            padx=10, pady=8, highlightthickness=1,
-            highlightbackground=self.COLORES['borde'],
+            font=(FUENTE_MONO, 10), bg='#fbfaf9', fg=TEXTO,
+            insertbackground=PRIMARIO, relief='flat',
+            padx=10, pady=ESPACIO_M, highlightthickness=1,
+            highlightbackground=BORDE,
         )
         self.txt_mapeo.pack(side='left', fill='both', expand=True)
         scroll = ttk.Scrollbar(txt_frame, command=self.txt_mapeo.yview)
@@ -643,22 +730,21 @@ class MigracionApp:
         self.txt_mapeo.edit_modified(False)
         self.txt_mapeo.bind('<<Modified>>', self._texto_mapeo_modificado)
 
-        lbl_status = ttk.LabelFrame(
-            tarjetas, text='  ESTADO · ACCESS → KOHA  ', padding=(14, 12),
-        )
-        lbl_status.grid(row=0, column=1, sticky='nsew', padx=(8, 0))
+        lbl_status = seccion_tarjeta(tarjetas, 'ESTADO · ACCESS → KOHA')
+        lbl_status.grid(row=0, column=1, sticky='nsew', padx=(ESPACIO_S, 0))
+        lbl_status.columnconfigure(0, weight=1)
         ttk.Label(
             lbl_status, text='Valores del campo Accesible a estado de ejemplar.',
             style='CardHint.TLabel',
-        ).pack(anchor='w', pady=(0, 8))
-        status_frame = ttk.Frame(lbl_status, style='Card.TFrame')
+        ).pack(anchor='w', pady=(0, ESPACIO_M))
+        status_frame = ttk.Frame(lbl_status, style='Tarjeta.TFrame')
         status_frame.pack(fill='both', expand=True)
         self.txt_status = tk.Text(
             status_frame, width=42, height=8, wrap='none',
-            font=('Consolas', 10), bg='#fbfaf9', fg=self.COLORES['texto'],
-            insertbackground=self.COLORES['guinda'], relief='flat',
-            padx=10, pady=8, highlightthickness=1,
-            highlightbackground=self.COLORES['borde'],
+            font=(FUENTE_MONO, 10), bg='#fbfaf9', fg=TEXTO,
+            insertbackground=PRIMARIO, relief='flat',
+            padx=10, pady=ESPACIO_M, highlightthickness=1,
+            highlightbackground=BORDE,
         )
         self.txt_status.pack(side='left', fill='both', expand=True)
         scroll_status = ttk.Scrollbar(status_frame, command=self.txt_status.yview)
@@ -669,12 +755,10 @@ class MigracionApp:
         self.txt_status.edit_modified(False)
         self.txt_status.bind('<<Modified>>', self._texto_mapeo_modificado)
 
-        lbl_tipos = ttk.LabelFrame(
-            f, text='  VALORES PREDETERMINADOS DE KOHA  ', padding=(14, 10),
-        )
-        lbl_tipos.pack(fill='x', pady=(14, 10))
+        lbl_tipos = seccion_tarjeta(f, 'VALORES PREDETERMINADOS DE KOHA')
+        lbl_tipos.pack(fill='x', pady=(ESPACIO_L, ESPACIO_M))
 
-        grid_tipos = ttk.Frame(lbl_tipos)
+        grid_tipos = ttk.Frame(lbl_tipos, style='Tarjeta.TFrame')
         grid_tipos.pack(fill='x')
         for columna in (1, 3, 5, 7):
             grid_tipos.columnconfigure(columna, weight=1)
@@ -690,7 +774,7 @@ class MigracionApp:
             variable.trace_add('write', self._configuracion_modificada)
 
         acciones = ttk.Frame(f, style='App.TFrame')
-        acciones.pack(fill='x')
+        acciones.pack(fill='x', pady=(ESPACIO_M, 0))
         ttk.Button(
             acciones, text='← Volver a conexiones', style='Quiet.TButton',
             command=lambda: self._navegar(self.frame_conexion),
@@ -698,7 +782,7 @@ class MigracionApp:
         ttk.Button(
             acciones, text='Guardar configuración', style='Secondary.TButton',
             command=self._guardar_config,
-        ).pack(side='right', padx=(8, 0))
+        ).pack(side='right', padx=(ESPACIO_S, 0))
         self.btn_siguiente_migracion = ttk.Button(
             acciones, text='Continuar a migración  →', style='Primary.TButton',
             command=self._continuar_a_migracion, state='disabled',
@@ -707,24 +791,29 @@ class MigracionApp:
 
     def _crear_pestana_log(self):
         f = self.frame_log
-        f.configure(padding=(22, 18, 22, 20))
+        f.configure(padding=(ESPACIO_L, ESPACIO_M, ESPACIO_L, ESPACIO_XL))
         self._encabezado_pagina(
             f, 'Actividad del sistema',
             'Mensajes de validación, avance e incidencias registrados durante la sesión.',
         )
-        contenedor = ttk.Frame(f, style='Card.TFrame', padding=10)
+        contenedor = tarjeta(f, padding=(ESPACIO_M, ESPACIO_M))
         contenedor.pack(fill='both', expand=True)
+        contenedor.columnconfigure(0, weight=1)
+        contenedor.rowconfigure(0, weight=1)
         self.txt_log = tk.Text(
             contenedor, wrap='word', width=100, height=25,
-            font=('Consolas', 9), bg='#fbfaf9', fg=self.COLORES['texto'],
-            insertbackground=self.COLORES['guinda'], relief='flat',
-            padx=12, pady=10,
+            font=(FUENTE_MONO, 9), bg='#fbfaf9', fg=TEXTO,
+            insertbackground=PRIMARIO, relief='flat',
+            padx=12, pady=ESPACIO_M,
         )
-        self.txt_log.pack(fill='both', expand=True)
+        self.txt_log.grid(row=0, column=0, sticky='nsew')
+        scroll_log = ttk.Scrollbar(contenedor, command=self.txt_log.yview)
+        scroll_log.grid(row=0, column=1, sticky='ns')
+        self.txt_log.configure(yscrollcommand=scroll_log.set)
         ttk.Button(
             f, text='Limpiar actividad', style='Quiet.TButton',
             command=lambda: self.txt_log.delete('1.0', tk.END),
-        ).pack(anchor='e', pady=(8, 0))
+        ).pack(anchor='e', pady=(ESPACIO_M, 0))
 
     def cargar_config(self) -> Dict:
         if os.path.exists(self.config_path):
