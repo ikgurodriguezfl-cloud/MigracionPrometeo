@@ -1,6 +1,7 @@
 """Interfaz grafica de la migracion Prometeo Access -> MySQL MARC21 -> Koha."""
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
+from pymysql.err import OperationalError
 import json
 import os
 import sqlite3
@@ -199,7 +200,6 @@ class MigracionApp:
             obtener=self.historial_lotes.obtener, publicar=self._publicar_ui, politica=self._politica_lote,
             iniciar=self._iniciar_desde_panel, exportar=self._exportar_marcxml,
             revisar=self._obtener_registros_revision, framework=self._framework_actual,
-            usar_base=self._usar_base_del_lote,
             proponer=self._proponer_correccion,
             listar_propuestas=self._listar_correcciones_pendientes,
             resolver_propuesta=self._resolver_correccion,
@@ -1045,20 +1045,20 @@ class MigracionApp:
         puede_revisar = tiene_permiso(self.perfil_usuario, 'revision_muestra')
         politica['revision'] = politica['revision'] and puede_revisar
         politica['aviso_destino_revision'] = ''
-        politica['usar_base_lote'] = False
         if (lote and lote.correctos and puede_revisar and not demostracion
                 and not self.migracion_en_curso and lote.destino != destino):
             base = lote.destino.get('database')
             host = lote.destino.get('host')
             puerto = lote.destino.get('port')
             if base and host and puerto:
-                politica['aviso_destino_revision'] = (
-                    f'Para revisar este lote, selecciona la base {base} en {host}:{puerto}.'
-                )
-                if tiene_permiso(self.perfil_usuario, 'validar_mysql'):
-                    politica['usar_base_lote'] = (
-                        host == destino.get('host') and puerto == destino.get('port')
-                        and not getattr(self, '_exportando', False)
+                if (host == destino.get('host') and puerto == destino.get('port')
+                        and tiene_permiso(self.perfil_usuario, 'validar_mysql')
+                        and not getattr(self, '_exportando', False)):
+                    politica['revision'] = True
+                    politica['aviso_destino_revision'] = f'La revisión abrirá la base {base} en {host}:{puerto}.'
+                else:
+                    politica['aviso_destino_revision'] = (
+                        f'Para revisar este lote, selecciona la base {base} en {host}:{puerto}.'
                     )
             else:
                 politica['aviso_destino_revision'] = 'El historial de este lote no identifica su destino MySQL.'
@@ -1983,12 +1983,23 @@ class MigracionApp:
         else:
             messagebox.showerror('Exportación no completada', mensaje)
 
-    def _usar_base_del_lote(self, lote_id):
-        if not self._requiere_permiso('validar_mysql'):
-            return
-        lote = self.historial_lotes.obtener(lote_id, resumen=True)
-        if self._politica_lote(lote)['usar_base_lote']:
-            self.entry_db.set(lote.destino['database'])
+    def _conectar_para_revision(self, writer):
+        while True:
+            try:
+                writer.connect()
+                return True
+            except OperationalError as exc:
+                if exc.args[:1] != (1045,) or not tiene_permiso(self.perfil_usuario, 'validar_mysql'):
+                    raise
+                clave = simpledialog.askstring(
+                    'Contraseña de MySQL',
+                    f'MySQL rechazó el acceso para {writer.config["user"]}. '
+                    f'Introduce la contraseña de la base {writer.config["database"]}.',
+                    show='*', parent=self.root,
+                )
+                if clave is None:
+                    return False
+                writer.config['password'] = clave
 
     def _obtener_registros_revision(self, lote_id, inicio, cantidad):
         if not self._sesion_valida():
@@ -2011,14 +2022,15 @@ class MigracionApp:
             raise ValueError('El rango de registros solicitado no es válido.')
 
         config = {
-            **self._destino_actual(),
+            **lote.destino,
             'user': self.entry_user.get(),
             'password': self.entry_pass.get(),
             'charset': 'utf8mb4',
         }
         writer = MySQLWriter(config)
         try:
-            writer.connect()
+            if not self._conectar_para_revision(writer):
+                return None
             pagina = self.historial_lotes.pagina_convertidas(lote.id, inicio, cantidad)
             motivos = {f['id']: f['motivos'] for f in pagina}
             registros = writer.obtener_registros_revision(list(motivos))
@@ -2026,13 +2038,13 @@ class MigracionApp:
                 registro['motivos_migracion'] = motivos[registro['id_ficha_acceso']]
             if inicio == 0:
                 self.historial_lotes.actualizar(lote.id, evento='Se consultó la revisión de fichas del lote.')
+            if self._destino_actual().get('database') != lote.destino['database']:
+                self.entry_db.set(lote.destino['database'])
+            if self.entry_pass.get() != config['password']:
+                self.entry_pass.set(config['password'])
             return registros
         except Exception as exc:
-            mensaje = str(exc)
-            password = config.get('password')
-            if password:
-                mensaje = mensaje.replace(password, '***')
-            raise RuntimeError(mensaje) from exc
+            raise RuntimeError(self._error_mysql_sin_secreto(exc, config['password'])) from exc
         finally:
             writer.close()
 

@@ -17,6 +17,7 @@ from lotes import HistorialLotes
 from marc_converter import MarcConverter
 from io import StringIO
 from pymarc import parse_xml_to_array
+from pymysql.err import OperationalError
 import main as entrada
 
 
@@ -410,21 +411,55 @@ class InterfazSprint2Tests(unittest.TestCase):
                 panel = app.panel_lotes
                 panel.seleccionar_real(lote.id)
                 panel._mostrar_detalle('incidencias')
-                self.assertIn('disabled', panel.btn_revisar_incidencias.state())
+                self.assertNotIn('disabled', panel.btn_revisar_incidencias.state())
                 self.assertIn('base_del_lote', panel.aviso_destino_revision.cget('text'))
-                self.assertEqual(panel.btn_usar_base_lote.winfo_manager(), 'pack')
 
                 app.entry_host.set('otro-servidor')
-                self.assertEqual(panel.btn_usar_base_lote.winfo_manager(), '')
                 self.assertIn('disabled', panel.btn_revisar_incidencias.state())
-
                 app.entry_host.set('localhost')
-                panel.btn_usar_base_lote.invoke()
+
+                modelo = MarcConverter()
+                record = modelo.ficha_a_record({'Ficha_No': 11, 'Titulo': 'Inventario'}, [])
+                escritor = Mock()
+                escritor.obtener_registros_revision.return_value = [{
+                    'id_ficha_acceso': 11, 'marca_marcxml': modelo.record_a_marcxml(record),
+                    'marca_iso2709': record.as_marc(), 'ejemplares': [],
+                }]
+                def crear_writer(config_mysql):
+                    escritor.config = config_mysql
+                    return escritor
+
+                with patch('gui_app.MySQLWriter', side_effect=crear_writer), \
+                        patch('gui_app.simpledialog.askstring') as pedir_clave, \
+                        patch('panel_lotes.messagebox.showerror') as error:
+                    escritor.connect.side_effect = OperationalError(1045, 'Acceso denegado')
+                    pedir_clave.return_value = None
+                    panel.btn_revisar_incidencias.invoke()
+                    self.assertEqual(app.entry_db.get(), 'base_guardada')
+                    self.assertEqual(panel._historial_pagina_actual, 'detalle')
+                    escritor.obtener_registros_revision.assert_not_called()
+                    error.assert_not_called()
+
+                    escritor.connect.side_effect = [OperationalError(1045, 'Acceso denegado'), None]
+                    pedir_clave.return_value = 'clave-temporal'
+                    panel.btn_revisar_incidencias.invoke()
+                    raiz.update_idletasks()
+                    self.assertEqual(panel._historial_pagina_actual, 'revision')
+                    self.assertEqual(escritor.config['database'], 'base_del_lote')
+                    self.assertEqual(escritor.config['password'], 'clave-temporal')
+                    self.assertEqual(pedir_clave.call_args.kwargs['show'], '*')
+                    escritor.obtener_registros_revision.assert_called_once_with([11])
+                    error.assert_not_called()
+
+                    pedir_clave.reset_mock()
+                    escritor.connect.side_effect = None
+                    app._obtener_registros_revision(lote.id, 0, 1)
+                    pedir_clave.assert_not_called()
+
                 self.assertEqual(app.entry_db.get(), 'base_del_lote')
+                self.assertEqual(app.entry_pass.get(), 'clave-temporal')
                 self.assertEqual(config['mysql']['database'], 'base_guardada')
-                self.assertNotIn('disabled', panel.btn_revisar_incidencias.state())
-                self.assertEqual(panel.aviso_destino_revision.winfo_manager(), '')
-                self.assertEqual(panel.btn_usar_base_lote.winfo_manager(), '')
+                self.assertNotIn('password', config['mysql'])
             finally:
                 app.cerrar()
 

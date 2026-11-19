@@ -453,7 +453,7 @@ class PanelLotes(ttk.Frame):
     def __init__(self, parent, listar, politica, iniciar, exportar, revisar,
                  proponer, listar_propuestas, resolver_propuesta,
                  listar_observaciones, registrar_observacion,
-                 conexiones, detener, reprocesar, obtener, publicar, framework=None, usar_base=None):
+                 conexiones, detener, reprocesar, obtener, publicar, framework=None):
         super().__init__(parent, padding=24, style='Panel.TFrame')
         self.framework = framework or dict
         self.listar = listar
@@ -463,7 +463,6 @@ class PanelLotes(ttk.Frame):
         self.iniciar = iniciar
         self.exportar = exportar
         self.revisar = revisar
-        self.usar_base = usar_base
         self.proponer = proponer
         self.listar_propuestas = listar_propuestas
         self.resolver_propuesta = resolver_propuesta
@@ -962,15 +961,10 @@ class PanelLotes(ttk.Frame):
         self.btn_reprocesar = ttk.Button(acciones, text='Reprocesar pendientes', command=self._reprocesar)
         self.btn_exportar = ttk.Button(acciones, text='Exportar MARC21', command=self._exportar)
         self.btn_revisar_detalle = ttk.Button(acciones, text='Revisar fichas', command=self._revisar)
-        acciones_incidencias = ttk.Frame(self.detalle_incidencias, style='Tarjeta.TFrame')
-        acciones_incidencias.grid(row=2, column=0, sticky='ew', pady=ESPACIO_XS)
         self.btn_revisar_incidencias = ttk.Button(
-            acciones_incidencias, text='Revisar fichas del lote', command=self._revisar,
+            self.detalle_incidencias, text='Revisar fichas del lote', command=self._revisar,
         )
-        self.btn_revisar_incidencias.pack(side='left')
-        self.btn_usar_base_lote = ttk.Button(
-            acciones_incidencias, text='Usar base del lote', command=self._usar_base_lote,
-        )
+        self.btn_revisar_incidencias.grid(row=2, column=0, sticky='w', pady=ESPACIO_XS)
         self.aviso_destino_revision = ttk.Label(
             self.detalle_incidencias, style='Tarjeta.TLabel', wraplength=600,
         )
@@ -1380,10 +1374,6 @@ class PanelLotes(ttk.Frame):
             self.aviso_destino_revision.grid()
         else:
             self.aviso_destino_revision.grid_remove()
-        if self.usar_base and politica.get('usar_base_lote'):
-            self.btn_usar_base_lote.pack(side='left', padx=(ESPACIO_S, 0))
-        else:
-            self.btn_usar_base_lote.pack_forget()
         solicitada = politica['detencion_solicitada']
         self.btn_detener.configure(text='Deteniendo…' if solicitada else 'Detener migración')
         if solicitada:
@@ -1406,11 +1396,6 @@ class PanelLotes(ttk.Frame):
         if self.politica(lote, self.demo.get())['exportar']:
             self.exportar(lote.id)
 
-    def _usar_base_lote(self):
-        lote = self.lote_actual()
-        if self.usar_base and self.politica(lote, self.demo.get()).get('usar_base_lote'):
-            self.usar_base(lote.id)
-
     def _revisar(self):
         lote = self.lote_actual()
         if not lote or not self.politica(lote, self.demo.get())['revision']:
@@ -1420,6 +1405,8 @@ class PanelLotes(ttk.Frame):
         try:
             perfil = self.framework()
             registros = self.revisar(lote.id, 0, tamano_pagina)
+            if registros is None:
+                return
         except Exception as exc:
             messagebox.showerror(
                 'No se pudieron consultar los registros', str(exc), parent=self,
@@ -2447,11 +2434,13 @@ class PanelLotes(ttk.Frame):
         def cargar_pagina(inicio, inicial=None, seleccionar=None):
             nonlocal inicio_pagina, registros_actuales
             try:
-                registros_actuales = (
+                pagina = (
                     inicial if inicial is not None
                     else self.revisar(lote.id, inicio, tamano_pagina)
                 )
-                if not registros_actuales:
+                if pagina is None:
+                    return
+                if not pagina:
                     raise ValueError('El lote no contiene registros para esta página.')
             except Exception as exc:
                 messagebox.showerror(
@@ -2460,6 +2449,7 @@ class PanelLotes(ttk.Frame):
                 )
                 return
             inicio_pagina = inicio
+            registros_actuales = pagina
             lista_registros.delete(*lista_registros.get_children())
             for registro in registros_actuales:
                 ficha = str(registro['id_ficha_acceso'])
