@@ -8,9 +8,11 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 import tkinter as tk
+from tkinter import ttk
 
 from auth import AuthenticationService
 from gui_app import MigracionApp
+from login_screen import LoginScreen
 from lotes import HistorialLotes
 from marc_converter import MarcConverter
 from io import StringIO
@@ -378,6 +380,172 @@ class IntegracionSprint2Tests(unittest.TestCase):
 
 
 class InterfazSprint2Tests(unittest.TestCase):
+    def test_revision_individual_muestra_ejemplares_en_formato_legible(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            raiz = tk.Tk()
+            raiz.withdraw()
+            try:
+                app = MigracionApp(
+                    raiz, HistorialLotes(Path(carpeta) / 'lotes.json'),
+                )
+                panel = app.panel_lotes
+                lote = SimpleNamespace(
+                    id='LOTE-PRUEBA', fuente='coleccion.mdb', correctos=2,
+                )
+                registro = {
+                    'id_ficha_acceso': 12, 'id_control': 'control-12',
+                    'estado': 'Convertida',
+                    'marca_marcxml': (
+                        '<record><leader>00000nam a2200000 i 4500</leader>'
+                        '<controlfield tag="001">control-12</controlfield>'
+                        '<datafield tag="245" ind1="0" ind2="0">'
+                        '<subfield code="a">Título de prueba</subfield>'
+                        '</datafield></record>'
+                    ),
+                    'marca_iso2709': None,
+                    'ejemplares': [{
+                        'num_adqui': 'A-12', 'biblioteca': 'Central',
+                        'branch_koha': 'Central', 'volumen': 'v. 1',
+                        'ejemplar': '12', 'tomo': '', 'accesible': 'Sí',
+                        'fecha_ingreso': '2026-01-02', 'signatura': 'QA 123',
+                    }],
+                }
+                registro_sin_xml = {
+                    'id_ficha_acceso': 13, 'id_control': 'control-13',
+                    'estado': 'Convertida', 'marca_marcxml': None,
+                    'marca_iso2709': None, 'ejemplares': [],
+                }
+                panel.lote_actual = Mock(return_value=lote)
+                panel.politica = Mock(return_value={
+                    'revision': True, 'registrar_observacion': True,
+                    'proponer_correccion': True, 'aprobar_correccion': True,
+                })
+                panel.revisar = Mock(return_value=[registro, registro_sin_xml])
+                ventana_principal = Mock()
+                ventana_principal.winfo_viewable.return_value = True
+                ventana_principal.state.return_value = 'normal'
+                ventana_principal.geometry.return_value = '1280x720+0+0'
+                panel.winfo_toplevel = Mock(return_value=ventana_principal)
+                panel.listar_observaciones = Mock(return_value=[])
+                panel.listar_propuestas = Mock(return_value=[{
+                    'id': 5, 'id_ficha_acceso': 12, 'propuesto_por': 'revisora',
+                    'fecha_creacion': '2026-01-03',
+                    'marca_marcxml_actual': registro['marca_marcxml'],
+                    'marca_iso2709_actual': None,
+                    'marca_marcxml_propuesta': registro['marca_marcxml'],
+                    'marca_iso2709_propuesta': None,
+                }])
+                panel._revisar()
+                raiz.update()
+                ventana_principal.state.assert_called_with('zoomed')
+                self.assertEqual(panel._cabecera_panel.winfo_manager(), '')
+                self.assertEqual(panel._navegacion_panel.winfo_manager(), '')
+
+                def recorrer(widget):
+                    for hijo in widget.winfo_children():
+                        yield hijo
+                        yield from recorrer(hijo)
+
+                tablas = [
+                    widget for widget in recorrer(raiz)
+                    if isinstance(widget, ttk.Treeview)
+                    and widget.cget('columns') == ('dato', 'valor')
+                ]
+                self.assertEqual(len(tablas), 1)
+                ejemplares = tablas[0]
+                grupo = ejemplares.get_children()[0]
+                datos = ejemplares.get_children(grupo)
+                self.assertEqual(len(datos), 9)
+                self.assertEqual(
+                    ejemplares.item(datos[-1], 'values'),
+                    ('Signatura', 'QA 123'),
+                )
+                tabla_campos = next(
+                    widget for widget in recorrer(raiz)
+                    if isinstance(widget, ttk.Treeview)
+                    and widget.cget('columns')
+                    == ('etiqueta', 'indicadores', 'contenido')
+                )
+                self.assertEqual(len(tabla_campos.get_children()), 3)
+
+                lista_registros = next(
+                    widget for widget in recorrer(raiz)
+                    if isinstance(widget, ttk.Treeview)
+                    and widget.cget('columns') == ('ficha', 'estado')
+                )
+                self.assertEqual(
+                    lista_registros.item('12', 'values'), ('12', 'Convertida'),
+                )
+                lista_registros.selection_set('13')
+                lista_registros.event_generate('<<TreeviewSelect>>')
+                raiz.update()
+                self.assertEqual(len(tabla_campos.get_children()), 1)
+                self.assertTrue(any(
+                    isinstance(widget, ttk.Label)
+                    and widget.cget('text').startswith(
+                        'No se pudieron cargar los campos MARC:',
+                    )
+                    for widget in recorrer(raiz)
+                ))
+                lista_registros.selection_set('12')
+                lista_registros.event_generate('<<TreeviewSelect>>')
+                raiz.update()
+                self.assertEqual(panel._historial_pagina_actual, 'revision')
+                self.assertIsInstance(panel._historial_paginas['revision'], ttk.Frame)
+
+                def validar_vista_interna(clave):
+                    self.assertEqual(panel._historial_pagina_actual, clave)
+                    self.assertFalse(any(
+                        isinstance(widget, tk.Toplevel) for widget in recorrer(raiz)
+                    ))
+
+                validar_vista_interna('revision')
+
+                def invocar_boton(texto):
+                    boton = next(
+                        widget for widget in recorrer(raiz)
+                        if isinstance(widget, ttk.Button)
+                        and widget.cget('text') == texto
+                    )
+                    boton.invoke()
+                    raiz.update()
+
+                invocar_boton('Observaciones')
+                validar_vista_interna('observaciones')
+                invocar_boton('Volver a revisión')
+                validar_vista_interna('revision')
+
+                with patch('panel_lotes.messagebox.showwarning'):
+                    invocar_boton('Corregir / proponer')
+                validar_vista_interna('editor')
+                invocar_boton('Volver a revisión')
+                validar_vista_interna('revision')
+
+                invocar_boton('Revisar propuestas')
+                validar_vista_interna('propuestas')
+                invocar_boton('Volver a revisión')
+                validar_vista_interna('revision')
+                invocar_boton('← Volver al lote')
+                self.assertEqual(panel._historial_pagina_actual, 'detalle')
+                self.assertNotIn('revision', panel._historial_paginas)
+                self.assertEqual(panel._cabecera_panel.winfo_manager(), 'grid')
+                self.assertEqual(panel._navegacion_panel.winfo_manager(), 'grid')
+                ventana_principal.state.assert_any_call('normal')
+                ventana_principal.geometry.assert_called_with('1280x720+0+0')
+            finally:
+                raiz.destroy()
+
+    def test_pantalla_login_inicia_sin_error_de_capas_canvas(self):
+        raiz = tk.Tk()
+        raiz.withdraw()
+        try:
+            login = LoginScreen(raiz, Mock(), Mock())
+            raiz.update_idletasks()
+            self.assertIsNotNone(login.entry_usuario)
+            self.assertIsNotNone(login.entry_contrasena)
+        finally:
+            raiz.destroy()
+
     def test_panel_integrado_y_botones_de_ejemplo(self):
         with tempfile.TemporaryDirectory() as carpeta:
             raiz = tk.Tk()
@@ -390,11 +558,34 @@ class InterfazSprint2Tests(unittest.TestCase):
                 self.assertEqual(app.panel_lotes.winfo_manager(), 'grid')
                 panel = app.panel_lotes
                 self.assertEqual(
-                    [panel.vistas.tab(tab, 'text') for tab in panel.vistas.tabs()],
-                    ['Resumen', 'Historial', 'Análisis'],
+                    list(panel._vistas_contenido),
+                    ['resumen', 'historial', 'analisis'],
                 )
+                self.assertEqual(panel._vista_actual, 'historial')
+                self.assertEqual(panel._historial_pagina_actual, 'lista')
+                self.assertEqual(
+                    panel.btn_revisar.cget('text'),
+                    'Revisar fichas',
+                )
+                self.assertEqual(
+                    list(panel._detalle_vistas),
+                    ['resumen', 'incidencias', 'actividad'],
+                )
+                panel._mostrar_detalle('actividad')
+                self.assertEqual(panel._detalle_actual, 'actividad')
+                panel._mostrar_detalle('resumen')
+                panel._mostrar_vista('analisis')
+                self.assertEqual(panel._vista_actual, 'analisis')
+                panel._mostrar_vista('resumen')
                 panel.demo.set(True); panel._cambiar_modo()
                 self.assertEqual(len(panel.tabla.get_children()), 4)
+                panel.tabla.selection_set('EJEMPLO-03')
+                panel._seleccionar()
+                self.assertEqual(panel._historial_pagina_actual, 'lista')
+                panel._abrir_detalle()
+                self.assertEqual(panel._historial_pagina_actual, 'detalle')
+                panel._volver_a_historial()
+                self.assertEqual(panel._historial_pagina_actual, 'lista')
                 for tipo in (
                     'Estado de los lotes', 'Resultado de fichas',
                     'Fichas correctas por lote', 'Ejemplares por lote',
@@ -404,6 +595,10 @@ class InterfazSprint2Tests(unittest.TestCase):
                     self.assertGreater(len(panel.grafico.find_all()), 0)
                 for lote in panel.lotes:
                     panel.seleccionado = lote.id; panel._pintar_detalle()
+                    for campo, valor in panel.metricas_lote.items():
+                        self.assertEqual(
+                            valor.cget('text'), f'{getattr(lote, campo):,}',
+                        )
                     self.assertIn('disabled', panel.btn_iniciar.state())
                     self.assertIn('disabled', panel.btn_exportar.state())
                     self.assertIn('disabled', panel.btn_revisar.state())
@@ -418,7 +613,7 @@ class InterfazSprint2Tests(unittest.TestCase):
                 else:
                     raiz.destroy()
 
-    def test_navegacion_lateral_secuencial_habilita_pasos_al_validar(self):
+    def test_navegacion_superior_secuencial_habilita_pasos_al_validar(self):
         with tempfile.TemporaryDirectory() as carpeta:
             raiz = tk.Tk()
             raiz.withdraw()

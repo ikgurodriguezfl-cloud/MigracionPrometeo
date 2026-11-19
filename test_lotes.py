@@ -301,6 +301,27 @@ class LotesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'MARC ISO2709'):
             campos_desde_iso2709(b'invalid')
 
+    def test_revision_recupera_campos_de_iso2709_si_el_xml_esta_ausente(self):
+        registro = Record(force_utf8=True)
+        registro.leader = '00000nam a2200000 i 4500'
+        registro.add_field(Field(tag='001', data='123'))
+        iso2709 = registro.as_marc()
+
+        campos, aviso = campos_para_revision({
+            'marca_marcxml': None,
+            'marca_iso2709': iso2709,
+        })
+
+        self.assertEqual(campos[1]['contenido'], '123')
+        self.assertIn('ISO2709', aviso)
+        with self.assertRaisesRegex(ValueError, 'ISO2709'):
+            campos_para_revision({
+                'marca_marcxml': None,
+                'marca_iso2709': None,
+            })
+        with self.assertRaisesRegex(ValueError, 'ISO2709'):
+            campos_para_revision({'marca_iso2709': None})
+
     def test_revision_recupera_ejemplares_desde_campos_952_si_tabla_vacia(self):
         record = Record(force_utf8=True)
         record.add_field(Field(

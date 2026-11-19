@@ -19,9 +19,11 @@ from permissions import (
     requerir_permiso, AccesoDenegado, tiene_permiso,
 )
 from ui_kit import (
-    FONDO, SUPERFICIE, TEXTO, TEXTO_SECUNDARIO, TEXTO_MUTADO, TEXTO_INVERSO,
+    FONDO, SUPERFICIE, SUPERFICIE_ALT, TEXTO, TEXTO_SECUNDARIO,
+    TEXTO_MUTADO, TEXTO_INVERSO,
     PRIMARIO, PRIMARIO_HOVER, PRIMARIO_ACTIVO, PRIMARIO_SUAVE,
     BARRA_LATERAL, BARRA_LATERAL_HOVER, BARRA_LATERAL_ACTIVA, BARRA_LATERAL_MUTADO,
+    NOCHE, NOCHE_ALT, NOCHE_BORDE,
     BORDE, BORDE_ENFOQUE, EXITO, EXITO_SUAVE, ADVERTENCIA, ADVERTENCIA_SUAVE,
     ERROR, ERROR_SUAVE, INFO, INFO_SUAVE,
     FUENTE, FUENTE_MONO,
@@ -31,6 +33,7 @@ from ui_kit import (
     ESPACIO_XS, ESPACIO_S, ESPACIO_M, ESPACIO_L, ESPACIO_XL,
     instalar_estilos, tarjeta, seccion_tarjeta, campo_formulario,
     encabezado_pagina, boton_accion, badge_estado, mensaje_estado, separador,
+    animar_valor, crear_icono, colorear_icono,
     COLORES_ESTADO_LOTE,
 )
 
@@ -41,21 +44,21 @@ class _DetencionSolicitada(Exception):
 
 class MigracionApp:
     COLORES = {
-        'fondo': '#f7f5f2',
-        'superficie': '#ffffff',
-        'texto': '#302a31',
-        'texto_secundario': '#777078',
-        'borde': '#e8e2de',
-        'guinda': '#6d0c2e',
-        'guinda_hover': '#8e2a50',
-        'guinda_suave': '#f3e8ec',
-        'barra_lateral': '#39232f',
-        'barra_lateral_hover': '#503443',
-        'barra_lateral_activa': '#654052',
-        'barra_lateral_muted': '#c5b7bf',
-        'verde': '#367963',
-        'verde_suave': '#e8f2ed',
-        'tierra': '#b48157',
+        'fondo': FONDO,
+        'superficie': SUPERFICIE,
+        'texto': TEXTO,
+        'texto_secundario': TEXTO_SECUNDARIO,
+        'borde': BORDE,
+        'guinda': PRIMARIO,
+        'guinda_hover': PRIMARIO_HOVER,
+        'guinda_suave': PRIMARIO_SUAVE,
+        'barra_lateral': BARRA_LATERAL,
+        'barra_lateral_hover': BARRA_LATERAL_HOVER,
+        'barra_lateral_activa': BARRA_LATERAL_ACTIVA,
+        'barra_lateral_muted': BARRA_LATERAL_MUTADO,
+        'verde': EXITO,
+        'verde_suave': EXITO_SUAVE,
+        'tierra': ADVERTENCIA,
     }
 
     def __init__(self, root: tk.Tk, historial_lotes=None,
@@ -77,10 +80,10 @@ class MigracionApp:
             f'NexoMARC | Migración Access a MARC21 (Koha) · '
             f'Perfil: {self.perfil_usuario}'
         )
-        ancho = min(1260, self.root.winfo_screenwidth() - 80)
-        alto = min(820, self.root.winfo_screenheight() - 100)
+        ancho = min(1480, self.root.winfo_screenwidth() - 48)
+        alto = min(940, self.root.winfo_screenheight() - 72)
         self.root.geometry(f'{ancho}x{alto}')
-        self.root.minsize(min(1080, ancho), min(700, alto))
+        self.root.minsize(min(1040, ancho), min(680, alto))
         self.root.configure(background=self.COLORES['fondo'])
 
         self.config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
@@ -135,68 +138,46 @@ class MigracionApp:
         distribucion = ttk.Frame(self.root, style='App.TFrame')
         distribucion.pack(fill='both', expand=True)
 
-        sidebar = tk.Frame(
-            distribucion, bg=self.COLORES['barra_lateral'], width=224,
-            highlightthickness=0,
+        encabezado = tk.Frame(
+            distribucion, bg=NOCHE, padx=ESPACIO_L, pady=ESPACIO_S,
+            highlightthickness=1, highlightbackground=NOCHE_BORDE,
         )
-        sidebar.pack(side='left', fill='y')
-        sidebar.pack_propagate(False)
-
-        # Marca
-        marca = tk.Frame(sidebar, bg=BARRA_LATERAL)
-        marca.pack(fill='x', padx=20, pady=(ESPACIO_L, ESPACIO_M))
-        tk.Label(
-            marca, text='N', width=2, height=1, bg='#ffffff',
-            fg=PRIMARIO, font=(FUENTE, 19, 'bold'),
-        ).pack(side='left', padx=(0, 10), ipady=3)
-        identidad = tk.Frame(marca, bg=BARRA_LATERAL)
+        encabezado.pack(fill='x')
+        marca = tk.Frame(encabezado, bg=NOCHE)
+        marca.pack(side='left')
+        crear_icono(
+            marca, 'database', color=TEXTO_INVERSO, size=22, fondo=NOCHE,
+        ).pack(side='left', padx=(0, ESPACIO_S))
+        identidad = tk.Frame(marca, bg=NOCHE)
         identidad.pack(side='left')
         tk.Label(
-            identidad, text='NexoMARC', bg=BARRA_LATERAL,
+            identidad, text='NexoMARC', bg=NOCHE,
             fg=TEXTO_INVERSO, font=(FUENTE, 12, 'bold'),
         ).pack(anchor='w')
-
-        separador(sidebar, pady=ESPACIO_M, padx=20)
-
         tk.Label(
-            sidebar, text='MIGRACIÓN', bg=BARRA_LATERAL,
-            fg=BARRA_LATERAL_MUTADO, font=(FUENTE, 7, 'bold'),
-        ).pack(anchor='w', padx=20, pady=(ESPACIO_S, ESPACIO_S))
+            identidad, text='Migración de catálogos', bg=NOCHE,
+            fg='#c2c9d8', font=(FUENTE, 8),
+        ).pack(anchor='w', pady=(2, 0))
 
-        area = ttk.Frame(distribucion, style='App.TFrame')
-        area.pack(side='left', fill='both', expand=True)
+        cuenta = tk.Frame(encabezado, bg=NOCHE)
+        cuenta.pack(side='right')
+        ttk.Label(
+            cuenta, text=self.usuario_nombre, style='HeroUser.TLabel',
+        ).pack(side='left', padx=(0, ESPACIO_S))
+        ttk.Label(
+            cuenta, text=self.perfil_usuario, style='HeroRole.TLabel',
+        ).pack(side='left', padx=(0, ESPACIO_M))
+        ttk.Button(
+            cuenta, text='↪  Salir', command=self._cerrar_sesion,
+            style='Quiet.TButton',
+        ).pack(side='left')
 
-        # ---------- Encabezado de sesion (dashboard derecho) ----------
-        encabezado_sesion = tarjeta(area, padding=(ESPACIO_M, ESPACIO_M))
-        encabezado_sesion.pack(fill='x', padx=ESPACIO_L, pady=(ESPACIO_L, ESPACIO_S))
-        encabezado_sesion.columnconfigure(1, weight=1)
-        tk.Label(
-            encabezado_sesion, text='USUARIO', bg=SUPERFICIE,
-            fg=TEXTO_SECUNDARIO, font=(FUENTE, 7, 'bold'),
-        ).grid(row=0, column=0, sticky='w')
-        self.lbl_usuario_sesion = tk.Label(
-            encabezado_sesion, text=self.usuario_nombre,
-            bg=SUPERFICIE, fg=TEXTO, font=(FUENTE, 13, 'bold'),
+        self.nav_container = tk.Frame(
+            distribucion, bg=NOCHE, padx=ESPACIO_L,
         )
-        self.lbl_usuario_sesion.grid(row=1, column=0, sticky='w', pady=(ESPACIO_XS, 0))
-        tk.Label(
-            encabezado_sesion, text='ROL', bg=SUPERFICIE,
-            fg=TEXTO_SECUNDARIO, font=(FUENTE, 7, 'bold'),
-        ).grid(row=0, column=1, sticky='e')
-        self.lbl_rol_sesion = tk.Label(
-            encabezado_sesion, text=self.perfil_usuario,
-            bg=SUPERFICIE, fg=PRIMARIO, font=(FUENTE, 13, 'bold'),
-        )
-        self.lbl_rol_sesion.grid(row=1, column=1, sticky='e')
-        tk.Frame(
-            encabezado_sesion, bg=BORDE, height=1,
-        ).grid(row=2, column=0, columnspan=2, sticky='ew', pady=(ESPACIO_M, 0))
-        tk.Label(
-            encabezado_sesion, text='SESION ACTIVA', bg=SUPERFICIE,
-            fg=EXITO, font=(FUENTE, 8, 'bold'),
-        ).grid(row=3, column=0, columnspan=2, sticky='w', pady=(ESPACIO_S, 0))
+        self.nav_container.pack(fill='x')
 
-        self.page_container = ttk.Frame(area, style='App.TFrame')
+        self.page_container = ttk.Frame(distribucion, style='App.TFrame')
         self.page_container.pack(fill='both', expand=True)
         self.page_container.columnconfigure(0, weight=1)
         self.page_container.rowconfigure(0, weight=1)
@@ -205,6 +186,7 @@ class MigracionApp:
         self.frame_config = ttk.Frame(self.page_container, style='App.TFrame')
         self.frame_migracion = ttk.Frame(self.page_container, style='App.TFrame')
         self.frame_log = ttk.Frame(self.page_container, style='App.TFrame')
+        self.frame_usuarios = ttk.Frame(self.page_container, style='App.TFrame')
 
         self.panel_lotes = PanelLotes(
             self.page_container, listar=lambda: self.historial_lotes.listar(resumen=True),
@@ -226,76 +208,99 @@ class MigracionApp:
             self.frame_config,
             self.frame_migracion,
             self.frame_log,
+            self.frame_usuarios,
         )
         for pagina in self.paginas:
             pagina.grid(row=0, column=0, sticky='nsew')
 
         self._nav_items = {}
-        self._crear_boton_navegacion(sidebar, 'Inicio', self.panel_lotes)
-        separador(sidebar, pady=ESPACIO_M, padx=20)
-        self._crear_boton_navegacion(sidebar, '1   Conexión', self.frame_conexion)
-        self._crear_boton_navegacion(sidebar, '2   Configuración', self.frame_config)
-        self._crear_boton_navegacion(sidebar, '3   Migración', self.frame_migracion)
-
-        tk.Label(
-            sidebar, text='SISTEMA', bg=BARRA_LATERAL,
-            fg=BARRA_LATERAL_MUTADO, font=(FUENTE, 7, 'bold'),
-        ).pack(anchor='w', padx=20, pady=(ESPACIO_L, ESPACIO_S))
-        self._crear_boton_navegacion(sidebar, 'Actividad', self.frame_log)
-
-        # ---------- Pie de barra lateral ----------
-        pie = tk.Frame(sidebar, bg=BARRA_LATERAL)
-        pie.pack(side='bottom', fill='x', padx=20, pady=ESPACIO_L)
-        tk.Frame(pie, bg=BARRA_LATERAL_HOVER, height=1).pack(fill='x', pady=(0, ESPACIO_M))
+        self._nav_indicadores = {}
+        self._nav_iconos = {}
+        self._crear_boton_navegacion(self.nav_container, 'Inicio', self.panel_lotes)
+        self._crear_boton_navegacion(self.nav_container, 'Conexión', self.frame_conexion)
+        self._crear_boton_navegacion(self.nav_container, 'Configuración', self.frame_config)
+        self._crear_boton_navegacion(self.nav_container, 'Migración', self.frame_migracion)
+        self._crear_boton_navegacion(self.nav_container, 'Actividad', self.frame_log)
         if tiene_permiso(self.perfil_usuario, 'gestionar_usuarios'):
-            tk.Button(
-                pie, text='Crear usuario', command=self._abrir_registro_usuario,
-                anchor='w', padx=0, pady=ESPACIO_S, bd=0, relief='flat',
-                cursor='hand2', font=(FUENTE, 9),
-                bg=BARRA_LATERAL, fg=BARRA_LATERAL_MUTADO,
-                activebackground=BARRA_LATERAL_HOVER,
-                activeforeground=TEXTO_INVERSO, highlightthickness=0,
-            ).pack(anchor='w', pady=(0, ESPACIO_S))
-        tk.Button(
-            pie, text='Cerrar sesión', command=self._cerrar_sesion,
-            anchor='w', padx=0, pady=ESPACIO_S, bd=0, relief='flat',
-            cursor='hand2', font=(FUENTE, 9),
-            bg=BARRA_LATERAL, fg=BARRA_LATERAL_MUTADO,
-            activebackground=BARRA_LATERAL_HOVER,
-            activeforeground=TEXTO_INVERSO, highlightthickness=0,
-        ).pack(anchor='w')
+            self._crear_boton_navegacion(self.nav_container, 'Usuarios', self.frame_usuarios)
 
         self._crear_pestana_conexion()
         self._crear_pestana_migracion()
         self._crear_pestana_config()
         self._crear_pestana_log()
+        self._crear_pestana_usuarios()
         for variable in (self.entry_host, self.entry_port, self.entry_user, self.entry_pass, self.entry_db):
             variable.trace_add('write', self._cambio_configuracion_mysql)
         self.pagina_actual = self.panel_lotes
         self.panel_lotes.tkraise()
         self._actualizar_navegacion_secuencial()
 
-    def _crear_boton_navegacion(self, parent, texto, pantalla):
+    def _crear_boton_navegacion(
+        self, parent, texto, pantalla, icono=None, comando=None,
+    ):
+        elemento = tk.Frame(parent, bg=NOCHE)
+        elemento.pack(side='left', padx=(0, ESPACIO_S))
+        indicador = tk.Frame(elemento, height=2, bg=NOCHE)
+        indicador.pack(side='bottom', fill='x')
+        icono = icono or {
+            'Inicio': 'home',
+            'Conexión': 'connect',
+            'Configuración': 'settings',
+            'Migración': 'play',
+            'Actividad': 'activity',
+            'Usuarios': 'users',
+        }.get(texto, 'file')
+        simbolo = crear_icono(
+            elemento, icono, color='#a8b0c2',
+            size=16, fondo=NOCHE,
+        )
+        simbolo.pack(side='left', padx=(ESPACIO_S, 4), pady=ESPACIO_XS)
         boton = tk.Button(
-            parent,
-            text=texto,
-            command=lambda destino=pantalla: self._navegar(destino),
-            anchor='w',
-            padx=18,
-            pady=ESPACIO_M,
-            bd=0,
-            relief='flat',
-            cursor='hand2',
-            font=(FUENTE, TAM_BOTON),
-            bg=BARRA_LATERAL,
-            fg='#e8dce1',
-            activebackground=BARRA_LATERAL_HOVER,
-            activeforeground=TEXTO_INVERSO,
-            disabledforeground=BARRA_LATERAL_MUTADO,
+            elemento, text=texto,
+            command=comando or (lambda destino=pantalla: self._navegar(destino)),
+            anchor='w', padx=5, pady=7, bd=0, relief='flat',
+            cursor='hand2', font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'),
+            bg=NOCHE, fg='#d2d7e2',
+            activebackground=NOCHE_ALT,
+            activeforeground=TEXTO_INVERSO, disabledforeground='#687287',
             highlightthickness=0,
         )
-        boton.pack(fill='x', padx=10, pady=ESPACIO_XS)
-        self._nav_items[pantalla] = boton
+        boton.pack(side='left', padx=(0, ESPACIO_S))
+        boton.bind(
+            '<Enter>',
+            lambda _evento: boton.configure(
+                bg=NOCHE_ALT,
+            ) if boton['state'] == 'normal' else None,
+        )
+        simbolo.bind(
+            '<Enter>',
+            lambda _evento: boton.configure(
+                bg=NOCHE_ALT,
+            ) if boton['state'] == 'normal' else None,
+        )
+        boton.bind(
+            '<Leave>',
+            lambda _evento, destino=pantalla: self._actualizar_navegacion_secuencial()
+            if destino is not None and destino in self._nav_items else None,
+        )
+        simbolo.bind(
+            '<Button-1>',
+            lambda _evento: comando() if comando else boton.invoke(),
+        )
+        boton.bind(
+            '<FocusIn>',
+            lambda _evento: boton.configure(
+                highlightthickness=1, highlightbackground=PRIMARIO,
+            ),
+        )
+        boton.bind(
+            '<FocusOut>',
+            lambda _evento: boton.configure(highlightthickness=0),
+        )
+        if pantalla is not None:
+            self._nav_indicadores[pantalla] = indicador
+            self._nav_items[pantalla] = boton
+            self._nav_iconos[pantalla] = simbolo
 
     def _estilos_interfaz(self):
         # Instala el sistema de diseno centralizado y devuelve el estilo para
@@ -319,6 +324,19 @@ class MigracionApp:
                          font=(FUENTE, TAM_TARJETA_TITULO, 'bold'))
         estilo.configure('CardMetric.TLabel', background=SUPERFICIE, foreground=PRIMARIO,
                          font=(FUENTE, 11, 'bold'))
+        estilo.configure('Hero.TFrame', background=NOCHE)
+        estilo.configure('HeroHint.TLabel', background=NOCHE, foreground='#c2c9d8',
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA))
+        estilo.configure('HeroTitle.TLabel', background=NOCHE, foreground=TEXTO_INVERSO,
+                         font=(FUENTE, 12, 'bold'))
+        estilo.configure('HeroUser.TLabel', background=NOCHE, foreground=TEXTO_INVERSO,
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'))
+        estilo.configure('HeroRole.TLabel', background=PRIMARIO_SUAVE, foreground=PRIMARIO,
+                         padding=(8, 4), font=(FUENTE, 8, 'bold'))
+        estilo.configure('HeroQuiet.TButton', background=NOCHE_ALT,
+                         foreground=TEXTO_INVERSO, borderwidth=0, padding=(8, 6))
+        estilo.map('HeroQuiet.TButton',
+                   background=[('active', NOCHE_BORDE), ('pressed', NOCHE)])
         estilo.configure('Field.TLabel', background=SUPERFICIE, foreground=TEXTO_SECUNDARIO,
                          font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'))
         estilo.configure('AppTitle.TLabel', background=FONDO, foreground=TEXTO,
@@ -329,24 +347,24 @@ class MigracionApp:
                          font=(FUENTE, TAM_SUBTITULO_PAGINA))
         estilo.configure('TEntry', fieldbackground=SUPERFICIE, foreground=TEXTO,
                          bordercolor=BORDE, lightcolor=BORDE_ENFOQUE, darkcolor=BORDE_ENFOQUE,
-                         padding=(8, 7), font=(FUENTE, TAM_CAMPO_ENTRADA))
+                         padding=(9, 7), font=(FUENTE, TAM_CAMPO_ENTRADA))
         estilo.map('TEntry', bordercolor=[('focus', BORDE_ENFOQUE), ('!focus', BORDE)])
-        estilo.configure('TButton', font=(FUENTE, TAM_BOTON, 'bold'), padding=(12, 8),
-                         background=SUPERFICIE, foreground=TEXTO, bordercolor=BORDE)
+        estilo.configure('TButton', font=(FUENTE, TAM_BOTON, 'bold'), padding=(10, 7),
+                         background=SUPERFICIE_ALT, foreground=TEXTO, borderwidth=0)
         estilo.map('TButton',
                    background=[('active', SUPERFICIE), ('disabled', '#f1eeec')],
                    foreground=[('disabled', TEXTO_MUTADO)])
         estilo.configure('Primary.TButton', background=PRIMARIO, foreground=TEXTO_INVERSO,
-                         bordercolor=PRIMARIO)
+                         borderwidth=0)
         estilo.map('Primary.TButton',
                    background=[('active', PRIMARIO_HOVER), ('pressed', PRIMARIO_ACTIVO),
-                               ('disabled', '#c8b7bd')],
+                               ('disabled', PRIMARIO_SUAVE)],
                    foreground=[('disabled', TEXTO_MUTADO)])
         estilo.configure('Secondary.TButton', background=PRIMARIO_SUAVE, foreground=PRIMARIO,
-                         bordercolor=BORDE)
+                         borderwidth=0)
         estilo.map('Secondary.TButton',
-                   background=[('active', PRIMARIO), ('pressed', PRIMARIO_ACTIVO)],
-                   foreground=[('active', TEXTO_INVERSO), ('pressed', TEXTO_INVERSO)])
+                   background=[('active', SUPERFICIE_ALT), ('pressed', PRIMARIO_SUAVE)],
+                   foreground=[('active', PRIMARIO), ('pressed', PRIMARIO)])
         estilo.configure('Quiet.TButton', background=FONDO, foreground=TEXTO_SECUNDARIO,
                          borderwidth=0, padding=(8, 6))
         estilo.map('Quiet.TButton', foreground=[('active', PRIMARIO)])
@@ -357,25 +375,25 @@ class MigracionApp:
                    foreground=[('disabled', TEXTO_MUTADO)])
         estilo.configure('TSeparator', background=BORDE)
         estilo.configure('Horizontal.TProgressbar', troughcolor=BORDE, background=PRIMARIO,
-                         thickness=8, borderwidth=0)
+                         thickness=10, borderwidth=0)
         estilo.configure('TCheckbutton', background=FONDO, foreground=TEXTO,
                          font=(FUENTE, TAM_CUERPO))
         estilo.configure('TLabelframe', background=SUPERFICIE, bordercolor=BORDE,
-                         relief='solid', borderwidth=1)
+                         relief='flat', borderwidth=0)
         estilo.configure('TLabelframe.Label', background=SUPERFICIE, foreground=TEXTO,
                          font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'))
         estilo.configure('TNotebook', background=FONDO, borderwidth=0)
-        estilo.configure('TNotebook.Tab', background='#f1eeec', foreground=TEXTO_SECUNDARIO,
-                         font=(FUENTE, TAM_BOTON, 'bold'), padding=(16, 10), borderwidth=0)
+        estilo.configure('TNotebook.Tab', background=SUPERFICIE_ALT, foreground=TEXTO_SECUNDARIO,
+                         font=(FUENTE, TAM_BOTON, 'bold'), padding=(12, 7), borderwidth=0)
         estilo.map('TNotebook.Tab',
                    background=[('selected', SUPERFICIE), ('active', SUPERFICIE)],
                    foreground=[('selected', TEXTO), ('active', TEXTO)])
         estilo.configure('Lotes.Treeview', background=SUPERFICIE, fieldbackground=SUPERFICIE,
-                         foreground=TEXTO, rowheight=34, font=(FUENTE, TAM_TABLA_CUERPO),
+                         foreground=TEXTO, rowheight=32, font=(FUENTE, TAM_TABLA_CUERPO),
                          bordercolor=BORDE, lightcolor=BORDE, darkcolor=BORDE)
-        estilo.configure('Lotes.Treeview.Heading', background='#f1eeec',
+        estilo.configure('Lotes.Treeview.Heading', background=SUPERFICIE_ALT,
                          foreground=TEXTO_SECUNDARIO, font=(FUENTE, TAM_TABLA_ENCABEZADO, 'bold'),
-                         padding=(8, 9))
+                         padding=(10, 7), borderwidth=0)
         estilo.map('Lotes.Treeview',
                    background=[('selected', PRIMARIO_SUAVE)],
                    foreground=[('selected', PRIMARIO)])
@@ -422,6 +440,7 @@ class MigracionApp:
             self.frame_config: 'editar_configuracion',
             self.frame_migracion: 'iniciar_conversion',
             self.frame_log: 'ver_actividad',
+            self.frame_usuarios: 'gestionar_usuarios',
         }
         permiso = permiso_por_pagina.get(pantalla)
         return permiso is not None and tiene_permiso(self.perfil_usuario, permiso)
@@ -466,6 +485,7 @@ class MigracionApp:
                 and conexiones_listas and configuracion_lista
             ),
             self.frame_log: self._pagina_autorizada(self.frame_log),
+            self.frame_usuarios: self._pagina_autorizada(self.frame_usuarios),
         }
         if not disponible.get(actual, False):
             actual = self.panel_lotes
@@ -481,14 +501,22 @@ class MigracionApp:
         for pantalla, boton in self._nav_items.items():
             seleccionada = pantalla == actual
             habilitado = disponible.get(pantalla, False)
+            fondo = NOCHE
+            color = (
+                TEXTO_INVERSO if seleccionada else
+                '#d2d7e2' if habilitado else '#687287'
+            )
             boton.configure(
                 state='normal' if habilitado else 'disabled',
-                bg=(self.COLORES['barra_lateral_activa'] if seleccionada
-                    else self.COLORES['barra_lateral']),
-                fg=('#ffffff' if seleccionada else '#f7f2f4' if habilitado
-                    else self.COLORES['barra_lateral_muted']),
-                font=('Segoe UI', 10, 'bold' if seleccionada else 'normal'),
+                bg=fondo,
+                fg=color,
+                font=(FUENTE, TAM_CUERPO, 'bold' if seleccionada else 'normal'),
             )
+            boton.master.configure(background=fondo)
+            self._nav_indicadores[pantalla].configure(
+                bg=PRIMARIO_HOVER if seleccionada else NOCHE,
+            )
+            colorear_icono(self._nav_iconos[pantalla], color, fondo)
         if hasattr(self, 'btn_siguiente_config'):
             self.btn_siguiente_config.configure(
                 state='normal' if conexiones_listas and not self.migracion_en_curso else 'disabled',
@@ -545,8 +573,10 @@ class MigracionApp:
         entry.grid(row=fila, column=col*2+1, sticky='ew', padx=(0, 14), pady=7)
         return var
 
-    def _encabezado_pagina(self, parent, titulo, descripcion):
-        return encabezado_pagina(parent, titulo, descripcion)
+    def _encabezado_pagina(self, parent, titulo, descripcion, icono='file'):
+        return encabezado_pagina(
+            parent, titulo, descripcion, icono=icono,
+        )
 
     def _crear_pestana_conexion(self):
         f = self.frame_conexion
@@ -554,6 +584,7 @@ class MigracionApp:
         self._encabezado_pagina(
             f, 'Conecta tus datos',
             'Selecciona el respaldo de Access y valida el destino MySQL antes de continuar.',
+            icono='connect',
         )
         tarjetas = ttk.Frame(f, style='App.TFrame')
         tarjetas.pack(fill='both', expand=True)
@@ -635,6 +666,7 @@ class MigracionApp:
         self._encabezado_pagina(
             f, 'Ejecuta la migración',
             'El proceso conserva avances por lote. Los valores no contemplados se registran como incidencias; no se infieren correspondencias.',
+            icono='play',
         )
 
         lbl_opts = seccion_tarjeta(f, 'ALCANCE DEL PROCESO')
@@ -698,6 +730,7 @@ class MigracionApp:
         self._encabezado_pagina(
             f, 'Revisa la configuración',
             'Define equivalencias explícitas para Koha. Si un valor no tiene regla autorizada, se omitirá y quedará señalado en las incidencias.',
+            icono='settings',
         )
         tarjetas = ttk.Frame(f, style='App.TFrame')
         tarjetas.pack(fill='both', expand=True)
@@ -795,6 +828,7 @@ class MigracionApp:
         self._encabezado_pagina(
             f, 'Actividad del sistema',
             'Mensajes de validación, avance e incidencias registrados durante la sesión.',
+            icono='activity',
         )
         contenedor = tarjeta(f, padding=(ESPACIO_M, ESPACIO_M))
         contenedor.pack(fill='both', expand=True)
@@ -1138,68 +1172,48 @@ class MigracionApp:
         else:
             self.cerrar()
 
-    def _abrir_registro_usuario(self):
-        try:
-            self.auth_service.require_admin(self.session_token)
-        except PermissionError as error:
-            messagebox.showerror('Acceso denegado', str(error))
-            return
-
-        ventana = tk.Toplevel(self.root)
-        ventana.title('Crear usuario')
-        ventana.geometry('520x620')
-        ventana.minsize(480, 580)
-        ventana.transient(self.root)
-        ventana.grab_set()
-        ventana.configure(background=self.COLORES['fondo'])
-        ventana.columnconfigure(0, weight=1)
-        ventana.rowconfigure(1, weight=1)
-
-        encabezado = tk.Frame(ventana, bg=self.COLORES['barra_lateral'], padx=24, pady=20)
-        encabezado.grid(row=0, column=0, sticky='ew')
-        encabezado.columnconfigure(1, weight=1)
-        tk.Label(
-            encabezado, text='N', width=2, height=1,
-            bg='#ffffff', fg=self.COLORES['guinda'],
-            font=('Segoe UI', 18, 'bold'),
-        ).grid(row=0, column=0, rowspan=2, sticky='w', padx=(0, 14), ipady=3)
-        tk.Label(
-            encabezado, text='Crear cuenta de usuario',
-            bg=self.COLORES['barra_lateral'], fg='#ffffff',
-            font=('Segoe UI', 16, 'bold'), anchor='w',
-        ).grid(row=0, column=1, sticky='ew')
-        tk.Label(
-            encabezado,
-            text='Registra el acceso y asigna el perfil de trabajo correspondiente.',
-            bg=self.COLORES['barra_lateral'],
-            fg=self.COLORES['barra_lateral_muted'],
-            font=('Segoe UI', 9), anchor='w', wraplength=410, justify='left',
-        ).grid(row=1, column=1, sticky='ew', pady=(4, 0))
-
-        formulario = ttk.Frame(ventana, style='App.TFrame', padding=(28, 22, 28, 12))
-        formulario.grid(row=1, column=0, sticky='nsew')
+    def _crear_pestana_usuarios(self):
+        f = self.frame_usuarios
+        f.configure(padding=(ESPACIO_L, ESPACIO_M, ESPACIO_L, ESPACIO_XL))
+        self._encabezado_pagina(
+            f, 'Gestión de usuarios',
+            'Crea cuentas y asigna el perfil necesario para cada tarea.',
+            icono='users',
+        )
+        tarjeta_formulario = tarjeta(f, padding=(ESPACIO_L, ESPACIO_L))
+        tarjeta_formulario.pack(fill='x', anchor='n')
+        formulario = ttk.Frame(
+            tarjeta_formulario, style='Tarjeta.TFrame',
+        )
+        formulario.pack(fill='x')
         formulario.columnconfigure(0, weight=1)
         ttk.Label(
-            formulario, text='Datos de acceso', style='CardTitle.TLabel',
-        ).grid(row=0, column=0, sticky='w', pady=(0, 14))
+            formulario, text='Nueva cuenta', style='CardTitle.TLabel',
+        ).grid(row=0, column=0, sticky='w', pady=(0, ESPACIO_M))
 
-        ttk.Label(formulario, text='Nombre de usuario', style='Field.TLabel').grid(
-            row=1, column=0, sticky='w', pady=(0, 5),
+        ttk.Label(
+            formulario, text='Nombre de usuario', style='Field.TLabel',
+        ).grid(
+            row=1, column=0, sticky='w', pady=(0, ESPACIO_XS),
         )
         entrada_usuario = ttk.Entry(formulario)
-        entrada_usuario.grid(row=2, column=0, sticky='ew', pady=(0, 14), ipady=2)
+        entrada_usuario.grid(row=2, column=0, sticky='ew', pady=(0, ESPACIO_M))
 
-        ttk.Label(formulario, text='Contraseña', style='Field.TLabel').grid(
-            row=3, column=0, sticky='w', pady=(0, 5),
+        ttk.Label(
+            formulario, text='Contraseña', style='Field.TLabel',
+        ).grid(
+            row=3, column=0, sticky='w', pady=(0, ESPACIO_XS),
         )
         entrada_contrasena = ttk.Entry(formulario, show='*')
-        entrada_contrasena.grid(row=4, column=0, sticky='ew', pady=(0, 12), ipady=2)
+        entrada_contrasena.grid(row=4, column=0, sticky='ew', pady=(0, ESPACIO_M))
 
-        ttk.Label(formulario, text='Confirmar contraseña', style='Field.TLabel').grid(
-            row=5, column=0, sticky='w', pady=(0, 5),
+        ttk.Label(
+            formulario, text='Confirmar contraseña', style='Field.TLabel',
+        ).grid(
+            row=5, column=0, sticky='w', pady=(0, ESPACIO_XS),
         )
         entrada_confirmacion = ttk.Entry(formulario, show='*')
-        entrada_confirmacion.grid(row=6, column=0, sticky='ew', pady=(0, 4), ipady=2)
+        entrada_confirmacion.grid(row=6, column=0, sticky='ew', pady=(0, ESPACIO_M))
 
         mostrar_contrasena = tk.BooleanVar(value=False)
 
@@ -1211,12 +1225,12 @@ class MigracionApp:
         ttk.Checkbutton(
             formulario, text='Mostrar contraseñas',
             variable=mostrar_contrasena, command=alternar_visibilidad,
-        ).grid(row=7, column=0, sticky='w', pady=(0, 18))
+        ).grid(row=7, column=0, sticky='w', pady=(0, ESPACIO_M))
 
-        ttk.Separator(formulario).grid(row=8, column=0, sticky='ew', pady=(0, 16))
+        ttk.Separator(formulario).grid(row=8, column=0, sticky='ew', pady=(0, ESPACIO_M))
         ttk.Label(
             formulario, text='Perfil de acceso', style='Field.TLabel',
-        ).grid(row=9, column=0, sticky='w', pady=(0, 5))
+        ).grid(row=9, column=0, sticky='w', pady=(0, ESPACIO_XS))
         combo_perfil = ttk.Combobox(
             formulario,
             values=('Ejecucion', 'Revision', 'Aprobacion', 'Administracion'),
@@ -1228,6 +1242,10 @@ class MigracionApp:
             formulario, style='CardHint.TLabel', wraplength=450,
         )
         descripcion_perfil.grid(row=11, column=0, sticky='w', pady=(7, 0))
+        self.lbl_usuario_estado = ttk.Label(
+            formulario, text='', style='CardHint.TLabel',
+        )
+        self.lbl_usuario_estado.grid(row=12, column=0, sticky='w', pady=(ESPACIO_M, 0))
         descripciones = {
             'Ejecucion': 'Puede validar los orígenes, ejecutar y reprocesar migraciones, '
                          'consultar incidencias y descargar reportes.',
@@ -1259,28 +1277,42 @@ class MigracionApp:
                     raise ValueError('Las contrasenas no coinciden.')
                 self.auth_service.create_user(usuario, contrasena, perfil)
             except sqlite3.IntegrityError:
-                messagebox.showerror('Registro rechazado', 'Ese usuario ya existe.', parent=ventana)
+                messagebox.showerror('Registro rechazado', 'Ese usuario ya existe.', parent=self.root)
+                entrada_usuario.focus_set()
                 return
             except (PermissionError, ValueError) as error:
-                messagebox.showerror('Registro rechazado', str(error), parent=ventana)
+                messagebox.showerror('Registro rechazado', str(error), parent=self.root)
                 return
-            messagebox.showinfo('Cuenta creada', f'El usuario fue creado con perfil {perfil}.', parent=ventana)
-            ventana.destroy()
+            entrada_usuario.delete(0, tk.END)
+            entrada_contrasena.delete(0, tk.END)
+            entrada_confirmacion.delete(0, tk.END)
+            mostrar_contrasena.set(False)
+            alternar_visibilidad()
+            self.lbl_usuario_estado.configure(
+                text=f'Cuenta creada: {usuario} · perfil {perfil}.',
+                foreground=EXITO,
+            )
+            self.log(f'[OK] Usuario {usuario} creado con perfil {perfil}.')
 
-        acciones = ttk.Frame(ventana, style='App.TFrame', padding=(28, 12, 28, 22))
-        acciones.grid(row=2, column=0, sticky='ew')
-        acciones.columnconfigure(0, weight=1)
+        acciones = ttk.Frame(tarjeta_formulario, style='Tarjeta.TFrame')
+        acciones.pack(fill='x', pady=(ESPACIO_L, 0))
         ttk.Button(
-            acciones, text='Cancelar', style='Quiet.TButton',
-            command=ventana.destroy,
-        ).grid(row=0, column=1, padx=(0, 8))
+            acciones, text='Limpiar', style='Quiet.TButton',
+            command=lambda: (
+                entrada_usuario.delete(0, tk.END),
+                entrada_contrasena.delete(0, tk.END),
+                entrada_confirmacion.delete(0, tk.END),
+                self.lbl_usuario_estado.configure(text=''),
+            ),
+        ).pack(side='right', padx=(0, ESPACIO_S))
         ttk.Button(
             acciones, text='Crear usuario', style='Primary.TButton',
             command=registrar,
-        ).grid(row=0, column=2)
-        ventana.bind('<Escape>', lambda _evento: ventana.destroy())
-        ventana.bind('<Return>', lambda _evento: registrar())
-        entrada_usuario.focus()
+        ).pack(side='right')
+        entrada_usuario.bind('<Return>', lambda _evento: entrada_contrasena.focus_set())
+        entrada_contrasena.bind('<Return>', lambda _evento: entrada_confirmacion.focus_set())
+        entrada_confirmacion.bind('<Return>', lambda _evento: registrar())
+        self.entry_nuevo_usuario = entrada_usuario
 
     def _seleccionar_access(self):
         path = filedialog.askopenfilename(
@@ -1797,7 +1829,7 @@ class MigracionApp:
         lote = self.historial_lotes.obtener(identificador, resumen=True)
         if lote is None:
             return
-        self.progress['value'] = lote.progreso
+        animar_valor(self.progress, lote.progreso)
         estado = {'con_incidencias': 'Con incidencias', 'concluido': 'Concluido', 'detenido': 'Detenido'}.get(
             lote.estado, ETAPAS[lote.etapa],
         )

@@ -28,7 +28,8 @@ from ui_kit import (
     TAM_TABLA_ENCABEZADO, TAM_TABLA_CUERPO, TAM_METRICA_VALOR, TAM_METRICA_ETIQUETA,
     ESPACIO_XS, ESPACIO_S, ESPACIO_M, ESPACIO_L, ESPACIO_XL,
     instalar_estilos, tarjeta, seccion_tarjeta, encabezado_pagina, badge_estado,
-    separador, COLORES_ESTADO_LOTE,
+    separador, animar_valor, crear_icono, colorear_icono,
+    COLORES_ESTADO_LOTE,
 )
 
 
@@ -151,7 +152,7 @@ def datos_grafico(lotes, resumen, tipo):
             'Cantidad de migraciones por estado',
             [ESTADOS[estado] for estado in ESTADOS],
             [resumen['por_estado'][estado] for estado in ESTADOS],
-            ['#90909a', '#477bbb', '#358265', '#a36d23', '#956c42'],
+            ['#687287', PRIMARIO, EXITO, ADVERTENCIA, ERROR],
         )
     if tipo == 'Resultado de fichas':
         return (
@@ -163,7 +164,7 @@ def datos_grafico(lotes, resumen, tipo):
                 sum(lote.errores for lote in lotes),
                 sum(lote.pendientes for lote in lotes),
             ],
-            ['#358265', '#477bbb', '#a36d23', '#90909a'],
+            [EXITO, INFO, ERROR, '#687287'],
         )
     if tipo not in ('Fichas correctas por lote', 'Ejemplares por lote'):
         raise ValueError(f'Tipo de gráfico no reconocido: {tipo}')
@@ -180,14 +181,16 @@ def datos_grafico(lotes, resumen, tipo):
         titulo,
         [f'{lote.id} · {os.path.basename(lote.fuente)}' for lote in lotes_destacados],
         [getattr(lote, clave) for lote in lotes_destacados],
-        ['#6d0c2e'] * len(lotes_destacados),
+        [PRIMARIO] * len(lotes_destacados),
     )
 
 
 def campos_desde_marcxml(contenido):
+    if not contenido:
+        raise ValueError('El registro no contiene MARCXML.')
     try:
         raiz = ElementTree.fromstring(contenido)
-    except ElementTree.ParseError as exc:
+    except (ElementTree.ParseError, TypeError) as exc:
         raise ValueError(f'El registro contiene MARCXML inválido: {exc}') from exc
 
     registros = [raiz] if raiz.tag.rsplit('}', 1)[-1] == 'record' else [
@@ -270,7 +273,7 @@ def campos_desde_iso2709(contenido):
 
 def campos_para_revision(registro):
     try:
-        return campos_desde_marcxml(registro['marca_marcxml']), ''
+        return campos_desde_marcxml(registro.get('marca_marcxml')), ''
     except ValueError as error_xml:
         # ISO2709 permite revisar el registro aunque la copia MARCXML esté dañada.
         try:
@@ -281,7 +284,7 @@ def campos_para_revision(registro):
                 f'ISO2709: {error_iso}'
             ) from error_iso
         return campos, (
-            'Aviso: el MARCXML almacenado no es válido. Los campos se '
+            'Aviso: no se pudo leer el MARCXML almacenado. Los campos se '
             'muestran recuperados desde la copia ISO2709.'
         )
 
@@ -418,7 +421,7 @@ class PanelLotes(ttk.Frame):
                  proponer, listar_propuestas, resolver_propuesta,
                  listar_observaciones, registrar_observacion,
                  conexiones, detener, reprocesar, obtener, publicar):
-        super().__init__(parent, padding=16, style='Panel.TFrame')
+        super().__init__(parent, padding=24, style='Panel.TFrame')
         self.listar = listar
         self.obtener = obtener
         self.publicar = publicar
@@ -468,26 +471,57 @@ class PanelLotes(ttk.Frame):
                          font=(FUENTE, 15, 'bold'))
         estilo.configure('Numero.TLabel', background=SUPERFICIE, foreground=PRIMARIO,
                          font=(FUENTE, TAM_METRICA_VALOR, 'bold'))
-        estilo.configure('Lotes.Treeview', rowheight=36, font=(FUENTE, TAM_TABLA_CUERPO),
+        estilo.configure('Lotes.Treeview', rowheight=26, font=(FUENTE, TAM_TABLA_CUERPO),
                          background=SUPERFICIE, fieldbackground=SUPERFICIE, foreground=TEXTO,
                          bordercolor=BORDE, lightcolor=BORDE, darkcolor=BORDE)
         estilo.configure('Lotes.Treeview.Heading', background=SUPERFICIE_ALT,
                          foreground=TEXTO_SECUNDARIO,
-                         font=(FUENTE, TAM_TABLA_ENCABEZADO, 'bold'), padding=(8, 9))
+                         font=(FUENTE, TAM_TABLA_ENCABEZADO, 'bold'), padding=(10, 7))
         estilo.map('Lotes.Treeview', background=[('selected', PRIMARIO_SUAVE)],
                    foreground=[('selected', PRIMARIO)])
+        estilo.configure('Revision.TNotebook', background=SUPERFICIE, borderwidth=0)
+        estilo.configure(
+            'Revision.TNotebook.Tab', background=SUPERFICIE_ALT,
+            foreground=TEXTO_SECUNDARIO, padding=(16, 10), borderwidth=0,
+            font=(FUENTE, TAM_BOTON, 'bold'),
+        )
+        estilo.map(
+            'Revision.TNotebook.Tab',
+            background=[('selected', SUPERFICIE), ('active', PRIMARIO_SUAVE)],
+            foreground=[('selected', PRIMARIO), ('active', TEXTO)],
+        )
+        estilo.configure(
+            'RevisionAction.TButton', background=SUPERFICIE,
+            foreground=TEXTO, borderwidth=0, padding=(6, 5),
+            font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'),
+        )
+        estilo.map(
+            'RevisionAction.TButton',
+            background=[('active', PRIMARIO_SUAVE), ('disabled', SUPERFICIE)],
+            foreground=[('active', PRIMARIO), ('disabled', TEXTO_MUTADO)],
+        )
         estilo.configure('Lotes.Horizontal.TProgressbar', background=PRIMARIO,
                          troughcolor=BORDE, thickness=8)
         estilo.configure('Estado.TLabel', background=SUPERFICIE, foreground=PRIMARIO,
                          font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'))
+        estilo.configure('Hero.TFrame', background=SUPERFICIE)
+        estilo.configure('HeroTitle.TLabel', background=SUPERFICIE, foreground=TEXTO,
+                         font=(FUENTE, TAM_TARJETA_TITULO, 'bold'))
+        estilo.configure('HeroHint.TLabel', background=SUPERFICIE, foreground=TEXTO_MUTADO,
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA))
+        estilo.configure('HeroQuiet.TButton', background=SUPERFICIE_ALT,
+                         foreground=TEXTO_SECUNDARIO, borderwidth=0, padding=(8, 6))
+        estilo.map('HeroQuiet.TButton',
+                   background=[('active', SUPERFICIE_ALT), ('pressed', PRIMARIO_SUAVE)])
 
     def _crear(self):
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(2, weight=1)
+        self.rowconfigure(3, weight=1)
 
         # ---------- Cabecera ----------
         cabecera = tarjeta(self, padding=(ESPACIO_M, ESPACIO_M))
         cabecera.grid(row=0, column=0, sticky='ew', pady=(0, ESPACIO_S))
+        self._cabecera_panel = cabecera
         cabecera.columnconfigure(1, weight=1)
         ttk.Label(
             cabecera, text='Panel de migraciones', style='Titulo.Panel.TLabel',
@@ -503,7 +537,7 @@ class PanelLotes(ttk.Frame):
             command=self.actualizar,
         ).pack(side='left', padx=(0, ESPACIO_S))
         self.btn_exportar_historial = ttk.Button(
-            acciones_cabecera, text='Exportar historial CSV',
+            acciones_cabecera, text='Exportar CSV',
             style='Secondary.TButton', command=self._exportar_historial,
         )
         self.btn_exportar_historial.pack(side='left', padx=(0, ESPACIO_S))
@@ -519,19 +553,59 @@ class PanelLotes(ttk.Frame):
         )
         self.aviso.grid(row=1, column=0, sticky='ew', pady=(0, ESPACIO_M))
 
-        # ---------- Pestañas ----------
-        self.vistas = ttk.Notebook(self)
-        self.vistas.grid(row=2, column=0, sticky='nsew')
-        self.resumen = ttk.Frame(self.vistas, style='Panel.TFrame')
-        self.historial_tab = ttk.Frame(self.vistas, style='Panel.TFrame')
-        self.analisis_tab = ttk.Frame(self.vistas, style='Panel.TFrame')
-        self.vistas.add(self.resumen, text='Resumen')
-        self.vistas.add(self.historial_tab, text='Historial')
-        self.vistas.add(self.analisis_tab, text='Análisis')
+        # ---------- Navegación de contenido ----------
+        self._vistas_contenido = {}
+        self._vistas_botones = {}
+        navegacion = tk.Frame(self, bg=FONDO)
+        navegacion.grid(row=2, column=0, sticky='ew', pady=(0, ESPACIO_S))
+        self._navegacion_panel = navegacion
+        for clave, etiqueta, icono in (
+            ('resumen', 'Resumen', 'chart'),
+            ('historial', 'Historial', 'file'),
+            ('analisis', 'Análisis', 'activity'),
+        ):
+            elemento = tk.Frame(navegacion, bg=FONDO)
+            elemento.pack(side='left', padx=(0, ESPACIO_S))
+            indicador = tk.Frame(elemento, height=3, bg=FONDO)
+            indicador.pack(side='bottom', fill='x')
+            simbolo = crear_icono(
+                elemento, icono, color=TEXTO_SECUNDARIO,
+                size=17, fondo=FONDO,
+            )
+            simbolo.pack(side='left', padx=(ESPACIO_S, 4), pady=ESPACIO_XS)
+            boton = tk.Button(
+                elemento, text=etiqueta,
+                command=lambda nombre=clave: self._mostrar_vista(nombre),
+                anchor='w', padx=6, pady=9, bd=0, relief='flat',
+                cursor='hand2', font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'),
+                bg=FONDO, fg=TEXTO_SECUNDARIO,
+                activebackground=SUPERFICIE_ALT,
+                activeforeground=PRIMARIO, highlightthickness=0,
+            )
+            boton.pack(side='left', padx=(0, ESPACIO_S))
+            simbolo.bind('<Button-1>', lambda _evento, control=boton: control.invoke())
+            self._vistas_contenido[clave] = None
+            self._vistas_botones[clave] = (boton, indicador, simbolo)
+
+        area_vistas = ttk.Frame(self, style='Panel.TFrame')
+        area_vistas.grid(row=3, column=0, sticky='nsew')
+        area_vistas.columnconfigure(0, weight=1)
+        area_vistas.rowconfigure(0, weight=1)
+        self.resumen = ttk.Frame(area_vistas, style='Panel.TFrame')
+        self.historial_tab = ttk.Frame(area_vistas, style='Panel.TFrame')
+        self.analisis_tab = ttk.Frame(area_vistas, style='Panel.TFrame')
+        self._vistas_contenido.update({
+            'resumen': self.resumen,
+            'historial': self.historial_tab,
+            'analisis': self.analisis_tab,
+        })
+        for vista in self._vistas_contenido.values():
+            vista.grid(row=0, column=0, sticky='nsew')
+        self._mostrar_vista('historial')
 
         # -------- Pestaña: Resumen --------
         self.resumen.columnconfigure(0, weight=1)
-        self.resumen.rowconfigure(3, weight=1)
+        self.resumen.rowconfigure(2, weight=1)
         self.metricas = {}
         metricas_frame = ttk.Frame(self.resumen, style='Panel.TFrame')
         metricas_frame.grid(row=0, column=0, sticky='ew', pady=(0, ESPACIO_M))
@@ -544,19 +618,21 @@ class PanelLotes(ttk.Frame):
             ('requieren_revision', 'REQUIEREN REVISIÓN'),
         )):
             tarjeta_m = tarjeta(metricas_frame, padding=(ESPACIO_M, ESPACIO_M))
-            tarjeta_m.grid(row=0, column=indice, sticky='ew', padx=(0 if indice == 0 else ESPACIO_S, ESPACIO_S))
+            tarjeta_m.grid(
+                row=0, column=indice, sticky='ew',
+                padx=(0 if indice == 0 else ESPACIO_S, ESPACIO_S),
+            )
             ttk.Label(tarjeta_m, text=titulo, style='Tarjeta.TLabel').pack(anchor='w')
             valor = ttk.Label(tarjeta_m, text='0', style='Numero.TLabel')
             valor.pack(anchor='w', pady=(ESPACIO_XS, 0))
             self.metricas[clave] = valor
 
-        orientacion = seccion_tarjeta(self.resumen, 'Lectura rápida')
-        orientacion.grid(row=1, column=0, sticky='ew', pady=(0, ESPACIO_M))
-        orientacion.columnconfigure(0, weight=1)
         self.lbl_lectura_rapida = ttk.Label(
-            orientacion, style='CardBody.TLabel', wraplength=950, justify='left',
+            self.resumen, style='Panel.TLabel', wraplength=1400, justify='left',
         )
-        self.lbl_lectura_rapida.pack(anchor='w', fill='x', padx=ESPACIO_M, pady=ESPACIO_M)
+        self.lbl_lectura_rapida.grid(
+            row=1, column=0, sticky='ew', pady=(0, ESPACIO_M),
+        )
 
         recientes = seccion_tarjeta(self.resumen, 'Actividad reciente')
         recientes.grid(row=2, column=0, sticky='nsew', pady=(0, ESPACIO_M))
@@ -564,16 +640,16 @@ class PanelLotes(ttk.Frame):
         recientes.rowconfigure(0, weight=1)
         self.lista_recientes = ttk.Treeview(
             recientes, columns=('estado', 'avance', 'fecha'),
-            show='tree headings', height=6, style='Lotes.Treeview',
+            show='tree headings', height=8, style='Lotes.Treeview',
         )
         self.lista_recientes.heading('#0', text='Lote / origen')
         self.lista_recientes.heading('estado', text='Estado')
         self.lista_recientes.heading('avance', text='Avance')
         self.lista_recientes.heading('fecha', text='Última actualización')
-        self.lista_recientes.column('#0', width=420, minwidth=180, stretch=True)
-        self.lista_recientes.column('estado', width=135, anchor='w')
-        self.lista_recientes.column('avance', width=90, anchor='center')
-        self.lista_recientes.column('fecha', width=175, anchor='w')
+        self.lista_recientes.column('#0', width=460, minwidth=180, stretch=True)
+        self.lista_recientes.column('estado', width=145, anchor='center')
+        self.lista_recientes.column('avance', width=105, anchor='center')
+        self.lista_recientes.column('fecha', width=190, anchor='center')
         self.lista_recientes.grid(row=0, column=0, sticky='nsew')
         recientes_scroll = ttk.Scrollbar(
             recientes, orient='vertical', command=self.lista_recientes.yview,
@@ -614,82 +690,210 @@ class PanelLotes(ttk.Frame):
         self.grafico.bind('<Configure>', lambda _evento: self._pintar_grafico())
 
         # -------- Pestaña: Historial --------
-        cuerpo = ttk.Panedwindow(self.historial_tab, orient='horizontal')
+        cuerpo = ttk.Frame(self.historial_tab, style='Panel.TFrame')
         cuerpo.pack(fill='both', expand=True, pady=(0, ESPACIO_S))
+        self._historial_contenedor = cuerpo
+        cuerpo.columnconfigure(0, weight=1)
+        cuerpo.rowconfigure(0, weight=1)
         listado = tarjeta(cuerpo, padding=ESPACIO_M)
         detalle = tarjeta(cuerpo, padding=ESPACIO_M)
-        cuerpo.add(listado, weight=3)
-        cuerpo.add(detalle, weight=2)
+        listado.grid(row=0, column=0, sticky='nsew')
+        detalle.grid(row=0, column=0, sticky='nsew')
+        self._historial_paginas = {
+            'lista': listado,
+            'detalle': detalle,
+        }
         listado.columnconfigure(0, weight=1)
-        listado.rowconfigure(2, weight=1)
+        listado.rowconfigure(1, weight=1)
         filtros = ttk.Frame(listado, style='Tarjeta.TFrame')
         filtros.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, ESPACIO_M))
-        ttk.Label(filtros, text='Estado', style='Tarjeta.TLabel').pack(side='left', padx=(0, ESPACIO_S))
+        filtros.columnconfigure(5, weight=1)
+        ttk.Label(filtros, text='Estado', style='Tarjeta.TLabel').grid(
+            row=0, column=0, sticky='w', padx=(0, ESPACIO_XS),
+        )
         combo = ttk.Combobox(
             filtros, textvariable=self.filtro,
-            values=['Todos'] + list(ESTADOS.values()), state='readonly', width=15,
+            values=['Todos'] + list(ESTADOS.values()), state='readonly', width=12,
         )
-        combo.pack(side='left', padx=(0, ESPACIO_M))
+        combo.grid(row=0, column=1, sticky='w', padx=(0, ESPACIO_S))
         combo.bind('<<ComboboxSelected>>', lambda _: self._pintar_tabla())
-        ttk.Label(filtros, text='Periodo', style='Tarjeta.TLabel').pack(side='left', padx=(0, ESPACIO_S))
+        ttk.Label(filtros, text='Periodo', style='Tarjeta.TLabel').grid(
+            row=0, column=2, sticky='w', padx=(0, ESPACIO_XS),
+        )
         combo_periodo = ttk.Combobox(
             filtros, textvariable=self.filtro_periodo,
             values=('Todo el historial', 'Últimos 7 días',
                     'Últimos 30 días', 'Este año'),
-            state='readonly', width=17,
-        )
-        combo_periodo.pack(side='left')
-        combo_periodo.bind('<<ComboboxSelected>>', lambda _: self._pintar_tabla())
-        filtros_orden = ttk.Frame(listado, style='Tarjeta.TFrame')
-        filtros_orden.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(0, ESPACIO_M))
-        ttk.Label(filtros_orden, text='Buscar', style='Tarjeta.TLabel').pack(side='left', padx=(0, ESPACIO_S))
-        entrada = ttk.Entry(filtros_orden, textvariable=self.consulta)
-        entrada.pack(side='left', fill='x', expand=True, padx=(0, ESPACIO_M))
-        ttk.Label(filtros_orden, text='Ordenar', style='Tarjeta.TLabel').pack(side='left', padx=(0, ESPACIO_S))
-        combo_orden = ttk.Combobox(
-            filtros_orden, textvariable=self.orden,
-            values=('Más recientes', 'Más antiguos', 'Más errores',
-                    'Mayor avance'),
             state='readonly', width=16,
         )
-        combo_orden.pack(side='left')
+        combo_periodo.grid(row=0, column=3, sticky='w', padx=(0, ESPACIO_S))
+        combo_periodo.bind('<<ComboboxSelected>>', lambda _: self._pintar_tabla())
+        control_detalle = ttk.Frame(filtros, style='Tarjeta.TFrame')
+        control_detalle.grid(row=0, column=8, sticky='e')
+        crear_icono(
+            control_detalle, 'file', color=PRIMARIO, size=16, fondo=SUPERFICIE,
+        ).pack(side='left', padx=(0, ESPACIO_XS))
+        self.btn_abrir_detalle = ttk.Button(
+            control_detalle, text='Ver detalle',
+            style='Primary.TButton', command=self._abrir_detalle,
+        )
+        self.btn_abrir_detalle.pack(side='left')
+        control_revision = ttk.Frame(filtros, style='Tarjeta.TFrame')
+        control_revision.grid(row=0, column=9, sticky='e', padx=(ESPACIO_S, 0))
+        crear_icono(
+            control_revision, 'search', color=PRIMARIO, size=16, fondo=SUPERFICIE,
+        ).pack(side='left', padx=(0, ESPACIO_XS))
+        self.btn_revisar = ttk.Button(
+            control_revision, text='Revisar fichas',
+            style='Secondary.TButton', command=self._revisar,
+        )
+        self.btn_revisar.pack(side='left')
+        ttk.Label(filtros, text='Buscar', style='Tarjeta.TLabel').grid(
+            row=0, column=4, sticky='w', padx=(0, ESPACIO_XS),
+        )
+        entrada = ttk.Entry(filtros, textvariable=self.consulta, width=12)
+        entrada.grid(row=0, column=5, sticky='ew', padx=(0, ESPACIO_S))
+        ttk.Label(filtros, text='Ordenar', style='Tarjeta.TLabel').grid(
+            row=0, column=6, sticky='w', padx=(0, ESPACIO_XS),
+        )
+        combo_orden = ttk.Combobox(
+            filtros, textvariable=self.orden,
+            values=('Más recientes', 'Más antiguos', 'Más errores',
+                    'Mayor avance'),
+            state='readonly', width=14,
+        )
+        combo_orden.grid(row=0, column=7, sticky='w')
         combo_orden.bind('<<ComboboxSelected>>', lambda _: self._pintar_tabla())
         self.consulta.trace_add('write', lambda *_: self._pintar_tabla())
         self.tabla = ttk.Treeview(
             listado, columns=('lote', 'estado', 'avance', 'total'),
             show='headings', selectmode='browse', style='Lotes.Treeview',
+            height=14,
         )
-        for columna, titulo, ancho in (('lote', 'Lote / origen', 240), ('estado', 'Estado', 130), ('avance', 'Avance', 70), ('total', 'Recibidos', 75)):
+        for columna, titulo, ancho, minimo in (
+            ('lote', 'Lote / origen', 560, 360),
+            ('estado', 'Estado', 170, 130),
+            ('avance', 'Avance', 120, 100),
+            ('total', 'Recibidos', 150, 120),
+        ):
             self.tabla.heading(columna, text=titulo)
-            self.tabla.column(columna, width=ancho, minwidth=65, stretch=columna == 'lote', anchor='w')
-        self.tabla.grid(row=2, column=0, sticky='nsew')
+            self.tabla.column(
+                columna, width=ancho, minwidth=minimo, stretch=columna == 'lote',
+                anchor='w' if columna == 'lote' else 'center',
+            )
+        self.tabla.grid(row=1, column=0, sticky='nsew')
         scroll = ttk.Scrollbar(listado, orient='vertical', command=self.tabla.yview)
-        scroll.grid(row=2, column=1, sticky='ns')
-        horizontal = ttk.Scrollbar(listado, orient='horizontal', command=self.tabla.xview)
-        horizontal.grid(row=3, column=0, sticky='ew')
-        self.tabla.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
+        scroll.grid(row=1, column=1, sticky='ns')
+        self.tabla.configure(yscrollcommand=scroll.set)
         for estado, config in COLORES_ESTADO_LOTE.items():
             self.tabla.tag_configure(estado, foreground=config['texto'])
         self.tabla.bind('<<TreeviewSelect>>', self._seleccionar)
-        self.sin_lotes = ttk.Label(listado, style='Tarjeta.TLabel', wraplength=430)
-        self.sin_lotes.grid(row=4, column=0, columnspan=2, sticky='ew', pady=(ESPACIO_M, 0))
+        self.tabla.bind('<Double-1>', lambda _evento: self._abrir_detalle())
+        self.tabla.bind('<Return>', lambda _evento: self._abrir_detalle())
+        self.sin_lotes = ttk.Label(listado, style='Tarjeta.TLabel', wraplength=900)
+        self.sin_lotes.grid(row=2, column=0, columnspan=2, sticky='ew', pady=(ESPACIO_M, 0))
 
-        # -------- Detalle del lote --------
+        # -------- Detalle del lote: vistas internas sin ventanas emergentes --------
         detalle.columnconfigure(0, weight=1)
-        self.identificador = ttk.Label(detalle, style='Tarjeta.TLabel')
+        detalle.rowconfigure(0, weight=1)
+        marco_detalle = ttk.Frame(detalle, style='Tarjeta.TFrame')
+        marco_detalle.grid(row=0, column=0, sticky='nsew')
+        marco_detalle.columnconfigure(0, weight=1)
+        marco_detalle.rowconfigure(1, weight=1)
+        self._detalle_vistas = {}
+        self._detalle_botones = {}
+        navegacion_detalle = tk.Frame(marco_detalle, bg=SUPERFICIE)
+        navegacion_detalle.grid(row=0, column=0, sticky='ew', pady=(0, ESPACIO_S))
+        self.btn_volver_historial = ttk.Button(
+            navegacion_detalle, text='← Todos los lotes',
+            command=self._volver_a_historial, style='Secondary.TButton',
+        )
+        self.btn_volver_historial.pack(side='left', padx=(0, ESPACIO_M))
+        area_detalle = ttk.Frame(marco_detalle, style='Tarjeta.TFrame')
+        area_detalle.grid(row=1, column=0, sticky='nsew')
+        area_detalle.columnconfigure(0, weight=1)
+        area_detalle.rowconfigure(0, weight=1)
+        self.detalle_resumen = ttk.Frame(
+            area_detalle, style='Tarjeta.TFrame', padding=ESPACIO_M,
+        )
+        self.detalle_incidencias = ttk.Frame(
+            area_detalle, style='Tarjeta.TFrame', padding=ESPACIO_M,
+        )
+        self.detalle_actividad = ttk.Frame(
+            area_detalle, style='Tarjeta.TFrame', padding=ESPACIO_M,
+        )
+        self._detalle_vistas.update({
+            'resumen': self.detalle_resumen,
+            'incidencias': self.detalle_incidencias,
+            'actividad': self.detalle_actividad,
+        })
+        for clave, etiqueta in (
+            ('resumen', 'Resumen'),
+            ('incidencias', 'Incidencias'),
+            ('actividad', 'Actividad'),
+        ):
+            boton = tk.Button(
+                navegacion_detalle, text=etiqueta,
+                command=lambda nombre=clave: self._mostrar_detalle(nombre),
+                anchor='w', padx=8, pady=6, bd=0, relief='flat',
+                cursor='hand2', font=(FUENTE, 9, 'bold'),
+                bg=SUPERFICIE, fg=TEXTO_SECUNDARIO,
+                activebackground=SUPERFICIE_ALT,
+                activeforeground=PRIMARIO, highlightthickness=0,
+            )
+            boton.pack(side='left', padx=(0, ESPACIO_XS))
+            self._detalle_botones[clave] = boton
+        for vista in self._detalle_vistas.values():
+            vista.grid(row=0, column=0, sticky='nsew')
+        self._mostrar_detalle('resumen')
+        self.detalle_resumen.columnconfigure(0, weight=2, uniform='detalle_lote')
+        self.detalle_resumen.columnconfigure(1, weight=1, uniform='detalle_lote')
+        self.detalle_resumen.rowconfigure(0, weight=1)
+        resumen_lote = seccion_tarjeta(self.detalle_resumen, 'Estado y avance')
+        resumen_lote.grid(row=0, column=0, sticky='nsew', padx=(0, ESPACIO_S))
+        resumen_lote.columnconfigure(0, weight=1)
+        panel_acciones = seccion_tarjeta(self.detalle_resumen, 'Siguiente paso')
+        panel_acciones.grid(row=0, column=1, sticky='nsew', padx=(ESPACIO_S, 0))
+        panel_acciones.columnconfigure(0, weight=1)
+        for marco, titulo, clave, vacio in (
+            (self.detalle_incidencias, 'Incidencias del lote', 'incidencias',
+             'No hay incidencias registradas para este lote.'),
+            (self.detalle_actividad, 'Actividad del lote', 'actividad',
+             'Aún no hay actividad registrada.'),
+        ):
+            marco.columnconfigure(0, weight=1)
+            marco.rowconfigure(1, weight=1)
+            ttk.Label(
+                marco, text=titulo, style='Nombre.TLabel',
+            ).grid(row=0, column=0, sticky='w', pady=(0, ESPACIO_M))
+            texto = tk.Text(
+                marco, wrap='word', font=(FUENTE, TAM_CUERPO),
+                background=SUPERFICIE_ALT, foreground=TEXTO,
+                relief='flat', padx=ESPACIO_M, pady=ESPACIO_M,
+                highlightthickness=1, highlightbackground=BORDE,
+                state='disabled',
+            )
+            texto.grid(row=1, column=0, sticky='nsew')
+            scroll_texto = ttk.Scrollbar(marco, command=texto.yview)
+            scroll_texto.grid(row=1, column=1, sticky='ns')
+            texto.configure(yscrollcommand=scroll_texto.set)
+            texto.mensaje_vacio = vacio
+            setattr(self, f'txt_{clave}_lote', texto)
+
+        self.identificador = ttk.Label(resumen_lote, style='Tarjeta.TLabel')
         self.identificador.grid(row=0, column=0, sticky='w', pady=(0, ESPACIO_XS))
-        self.nombre = ttk.Label(detalle, style='Nombre.TLabel', wraplength=340)
+        self.nombre = ttk.Label(resumen_lote, style='Nombre.TLabel')
         self.nombre.grid(row=1, column=0, sticky='ew', pady=(0, ESPACIO_M))
-        self.estado = ttk.Label(detalle, style='Estado.TLabel')
-        self.estado.grid(row=2, column=0, sticky='ew', pady=(0, ESPACIO_M))
-        self.etapa = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=345)
+        self.estado = ttk.Label(resumen_lote, style='Estado.TLabel')
+        self.estado.grid(row=2, column=0, sticky='w', pady=(0, ESPACIO_S))
+        self.etapa = ttk.Label(resumen_lote, style='Tarjeta.TLabel')
         self.etapa.grid(row=3, column=0, sticky='ew', pady=(0, ESPACIO_M))
-        self.barra = ttk.Progressbar(detalle, maximum=100, style='Lotes.Horizontal.TProgressbar')
-        self.barra.grid(row=4, column=0, sticky='ew', pady=(0, ESPACIO_M))
-        self.conteos = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=350)
-        self.conteos.grid(row=5, column=0, sticky='ew', pady=(ESPACIO_S, ESPACIO_M))
-        metricas = ttk.Frame(detalle, style='Tarjeta.TFrame')
-        metricas.grid(row=6, column=0, sticky='ew', pady=(0, ESPACIO_M))
+        self.barra = ttk.Progressbar(resumen_lote, maximum=100, style='Lotes.Horizontal.TProgressbar')
+        self.barra.grid(row=4, column=0, sticky='ew', pady=(0, ESPACIO_S))
+        self.conteos = ttk.Label(resumen_lote, style='Tarjeta.TLabel')
+        self.conteos.grid(row=5, column=0, sticky='ew', pady=(0, ESPACIO_M))
+        metricas = ttk.Frame(resumen_lote, style='Tarjeta.TFrame')
+        metricas.grid(row=6, column=0, sticky='ew', pady=(0, ESPACIO_S))
         metricas.columnconfigure((0, 1), weight=1, uniform='metricas')
         self.metricas_lote = {}
         for indice, (campo, etiqueta) in enumerate((
@@ -697,39 +901,99 @@ class PanelLotes(ttk.Frame):
             ('errores', 'Con error'), ('pendientes', 'Pendientes'),
         )):
             tarjeta_m = tarjeta(metricas, padding=(ESPACIO_S, ESPACIO_S))
-            tarjeta_m.grid(row=indice // 2, column=indice % 2, sticky='ew', padx=(0, ESPACIO_S), pady=(0, ESPACIO_S))
-            ttk.Label(tarjeta_m, text=etiqueta, style='Tarjeta.TLabel').pack(side='left')
+            tarjeta_m.grid(
+                row=indice // 2, column=indice % 2, sticky='ew',
+                padx=(0, ESPACIO_S), pady=(0, ESPACIO_XS),
+            )
+            ttk.Label(tarjeta_m, text=etiqueta, style='Tarjeta.TLabel').pack(
+                side='left', anchor='w',
+            )
             valor = ttk.Label(tarjeta_m, text='—', style='Numero.TLabel')
             valor.pack(side='right')
             self.metricas_lote[campo] = valor
 
-        self.siguiente = ttk.Label(detalle, style='Tarjeta.TLabel', wraplength=350)
-        self.siguiente.grid(row=7, column=0, sticky='ew', pady=(0, ESPACIO_M))
-        acciones = ttk.Frame(detalle, style='Tarjeta.TFrame')
-        acciones.grid(row=8, column=0, sticky='ew')
+        self.actualizado = ttk.Label(resumen_lote, style='Tarjeta.TLabel')
+        self.actualizado.grid(row=7, column=0, sticky='ew', pady=(ESPACIO_S, 0))
+        self.siguiente = ttk.Label(panel_acciones, style='Tarjeta.TLabel', wraplength=380)
+        self.siguiente.grid(row=0, column=0, sticky='ew', pady=(0, ESPACIO_M))
+        ttk.Label(
+            panel_acciones, text='Acciones disponibles', style='Nombre.TLabel',
+        ).grid(row=1, column=0, sticky='w', pady=(0, ESPACIO_S))
+        acciones = ttk.Frame(panel_acciones, style='Tarjeta.TFrame')
+        acciones.grid(row=2, column=0, sticky='ew')
         acciones.columnconfigure((0, 1), weight=1, uniform='acciones')
-        self.btn_iniciar = ttk.Button(acciones, text='Ejecutar migración', command=self._iniciar)
+        self.btn_iniciar = ttk.Button(acciones, text='Iniciar migración', command=self._iniciar)
         self.btn_detener = ttk.Button(acciones, text='Detener migración', command=self._detener)
         self.btn_reprocesar = ttk.Button(acciones, text='Reprocesar pendientes', command=self._reprocesar)
         self.btn_exportar = ttk.Button(acciones, text='Exportar MARCXML', command=self._exportar)
-        self.btn_revisar = ttk.Button(acciones, text='Revisar fichas', command=self._revisar)
         self.btn_incidencias = ttk.Button(acciones, text='Ver incidencias', command=self._incidencias)
         self.btn_resumen = ttk.Button(acciones, text='Guardar reporte', command=self._resumen)
         for indice, boton in enumerate((
             self.btn_iniciar, self.btn_detener, self.btn_reprocesar, self.btn_exportar,
-            self.btn_revisar, self.btn_incidencias,
+            self.btn_incidencias,
         )):
-            boton.grid(row=indice // 2, column=indice % 2, sticky='ew', padx=(0, ESPACIO_S), pady=ESPACIO_XS)
+            boton.grid(
+                row=indice // 2, column=indice % 2, sticky='ew',
+                padx=(0, ESPACIO_S), pady=ESPACIO_XS,
+            )
         self.btn_resumen.grid(row=3, column=0, columnspan=2, sticky='ew', padx=(0, ESPACIO_S), pady=ESPACIO_XS)
-        self.actualizado = ttk.Label(detalle, style='Tarjeta.TLabel')
-        self.actualizado.grid(row=9, column=0, sticky='ew', pady=(ESPACIO_M, 0))
-        ttk.Button(
-            self.historial_tab, text='Ver actividad del lote', style='Quiet.TButton',
-            command=self._actividad,
-        ).pack(anchor='e', pady=(ESPACIO_S, 0))
+        def ajustar_wrap_resumen(evento):
+            self.nombre.configure(wraplength=max(320, evento.width - 2 * ESPACIO_M))
+            self.etapa.configure(wraplength=max(320, evento.width - 2 * ESPACIO_M))
+            self.conteos.configure(wraplength=max(320, evento.width - 2 * ESPACIO_M))
+
+        resumen_lote.bind('<Configure>', ajustar_wrap_resumen)
+        panel_acciones.bind(
+            '<Configure>',
+            lambda evento: self.siguiente.configure(
+                wraplength=max(240, evento.width - 2 * ESPACIO_M),
+            ),
+        )
+        self._mostrar_pagina_historial('lista')
+
+    def _mostrar_pagina_historial(self, pagina):
+        if pagina not in self._historial_paginas:
+            raise ValueError(f'Vista de historial no reconocida: {pagina}')
+        self._historial_pagina_actual = pagina
+        self._historial_paginas[pagina].tkraise()
+
+    def _volver_a_historial(self):
+        self._mostrar_pagina_historial('lista')
+
+    def _mostrar_detalle(self, clave):
+        if clave not in self._detalle_vistas:
+            raise ValueError(f'Vista de detalle no reconocida: {clave}')
+        self._detalle_actual = clave
+        self._detalle_vistas[clave].tkraise()
+        for nombre, boton in self._detalle_botones.items():
+            seleccionada = nombre == clave
+            boton.configure(
+                bg=SUPERFICIE if seleccionada else SUPERFICIE_ALT,
+                fg=PRIMARIO if seleccionada else TEXTO_SECUNDARIO,
+                font=(FUENTE, 9, 'bold' if seleccionada else 'normal'),
+            )
+
+    def _mostrar_vista(self, clave):
+        if clave not in self._vistas_contenido:
+            raise ValueError(f'Vista de panel no reconocida: {clave}')
+        self._vista_actual = clave
+        self._vistas_contenido[clave].tkraise()
+        for nombre, (boton, indicador, simbolo) in self._vistas_botones.items():
+            seleccionada = nombre == clave
+            fondo = SUPERFICIE if seleccionada else FONDO
+            color = PRIMARIO if seleccionada else TEXTO_SECUNDARIO
+            boton.configure(
+                bg=fondo, fg=color,
+                font=(FUENTE, TAM_CAMPO_ETIQUETA,
+                      'bold' if seleccionada else 'normal'),
+            )
+            boton.master.configure(bg=fondo)
+            indicador.configure(bg=PRIMARIO if seleccionada else FONDO)
+            colorear_icono(simbolo, color, fondo)
 
     def _cambiar_modo(self):
         self.seleccionado = None
+        self._mostrar_pagina_historial('lista')
         self.actualizar()
 
     def actualizar(self, seleccionar=None):
@@ -805,9 +1069,10 @@ class PanelLotes(ttk.Frame):
         self.filtro_periodo.set('Todo el historial')
         self.orden.set('Más recientes')
         self.consulta.set('')
-        self.vistas.select(self.historial_tab)
+        self._mostrar_vista('historial')
         self._pintar_tabla()
         self._pintar_detalle()
+        self._mostrar_pagina_historial('detalle')
 
     def _pintar_grafico(self):
         if not hasattr(self, 'grafico'):
@@ -823,7 +1088,7 @@ class PanelLotes(ttk.Frame):
         if not etiquetas:
             self.grafico.create_text(
                 ancho / 2, alto / 2, text='No hay datos para mostrar.',
-                fill='#777078', font=('Segoe UI', 11), anchor='center',
+                fill=TEXTO_SECUNDARIO, font=('Segoe UI', 11), anchor='center',
             )
             return
         maximo = max(valores, default=0) or 1
@@ -834,12 +1099,12 @@ class PanelLotes(ttk.Frame):
             y = 16 + indice * espacio
             self.grafico.create_text(
                 margen_izquierdo - 12, y + 9, text=etiqueta,
-                fill='#686168', font=('Segoe UI', 9), anchor='e',
+                fill=TEXTO_SECUNDARIO, font=('Segoe UI', 9), anchor='e',
                 width=margen_izquierdo - 20,
             )
             self.grafico.create_rectangle(
                 margen_izquierdo, y, margen_izquierdo + ancho_barra, y + 18,
-                fill='#f1eeec', outline='',
+                fill=SUPERFICIE_ALT, outline='',
             )
             if valor:
                 self.grafico.create_rectangle(
@@ -913,8 +1178,11 @@ class PanelLotes(ttk.Frame):
         self.orden.set('Más recientes')
         self.consulta.set('')
         self.actualizar(identificador)
+        self._mostrar_vista('historial')
+        self._mostrar_pagina_historial('detalle')
 
     def _pintar_tabla(self):
+        seleccion_anterior = self.seleccionado
         self.tabla.delete(*self.tabla.get_children())
         consulta = self.consulta.get().strip().casefold()
         visibles = []
@@ -929,10 +1197,17 @@ class PanelLotes(ttk.Frame):
             visibles.append(lote.id)
         if self.seleccionado in visibles:
             self.tabla.selection_set(self.seleccionado)
+        else:
+            self.seleccionado = visibles[0] if visibles else None
+            if self.seleccionado:
+                self.tabla.selection_set(self.seleccionado)
+        if self.seleccionado != seleccion_anterior:
+            self._pintar_detalle()
         self.sin_lotes.config(
             text=('Aún no hay lotes. Ve a «1 Conexión» para validar tu archivo Access.'
                   if not self.lotes else
-                  f'{len(visibles)} de {len(self.lotes)} lotes visibles. Selecciona uno para ver el detalle.')
+                  f'{len(visibles)} de {len(self.lotes)} lotes visibles. '
+                  'Selecciona uno y pulsa «Ver detalle»; también puedes hacer doble clic.')
         )
 
     def _seleccionar(self, _evento=None):
@@ -940,6 +1215,10 @@ class PanelLotes(ttk.Frame):
         if seleccion:
             self.seleccionado = seleccion[0]
             self._pintar_detalle()
+
+    def _abrir_detalle(self):
+        if self.lote_actual():
+            self._mostrar_pagina_historial('detalle')
 
     def lote_actual(self):
         return next((lote for lote in self.lotes if lote.id == self.seleccionado), None)
@@ -953,7 +1232,9 @@ class PanelLotes(ttk.Frame):
                 etiqueta.config(text='')
             for valor in self.metricas_lote.values():
                 valor.config(text='—')
-            self.barra['value'] = 0
+            animar_valor(self.barra, 0)
+            self._actualizar_texto_lote('incidencias', '')
+            self._actualizar_texto_lote('actividad', '')
         else:
             self.identificador.config(text=lote.id)
             self.nombre.config(text=os.path.basename(lote.fuente))
@@ -976,7 +1257,7 @@ class PanelLotes(ttk.Frame):
                 + (f' · {inicio}' if inicio else '')
                 + f'\n{ETAPAS[lote.etapa]}'
             ))
-            self.barra['value'] = lote.progreso
+            animar_valor(self.barra, lote.progreso)
             self.conteos.config(text=(
                 f'Procesadas  {lote.procesados:,} / {lote.total_objetivo:,}  ·  {lote.progreso:g} %\n'
                 f'Ejemplares guardados  {lote.ejemplares:,}'
@@ -995,6 +1276,26 @@ class PanelLotes(ttk.Frame):
                 siguiente = f'Reprocesamiento de {lote.lote_origen}. {siguiente}'
             self.siguiente.config(text=siguiente)
             self.actualizado.config(text='Última actualización: ' + datetime.fromisoformat(lote.actualizado_en).strftime('%d/%m/%Y %H:%M:%S'))
+            detalle_incidencias = '\n\n'.join(
+                f'{item["referencia"]}\n{item["mensaje"]}'
+                for item in lote.incidencias
+            )
+            texto_incidencias = (
+                f'{lote.errores:,} fichas con error · '
+                f'{len(lote.incidencias):,} incidencias registradas\n\n'
+                f'{detalle_incidencias}'
+            )
+            self._actualizar_texto_lote('incidencias', texto_incidencias)
+            tecnico = (
+                f'Lote {lote.id}\n'
+                f'Versión del mapeo: {lote.version_mapeo or "Sin registrar"}\n'
+                f'Huella del mapeo: {lote.huella_mapeo or "Sin registrar"}\n\n'
+            )
+            eventos = '\n\n'.join(
+                f'{item["fecha"]}\n{item["mensaje"]}'
+                for item in reversed(lote.actividad)
+            )
+            self._actualizar_texto_lote('actividad', tecnico + eventos)
         politica = self.politica(lote, self.demo.get())
         principal = next((accion for accion in (
             'detener', 'iniciar', 'exportar', 'incidencias', 'reprocesar', 'revision', 'resumen',
@@ -1012,10 +1313,20 @@ class PanelLotes(ttk.Frame):
         self.btn_nueva_migracion.configure(
             state='normal' if politica.get('nueva_migracion', False) else 'disabled',
         )
+        self.btn_abrir_detalle.configure(
+            state='normal' if lote else 'disabled',
+        )
         solicitada = politica['detencion_solicitada']
         self.btn_detener.configure(text='Deteniendo…' if solicitada else 'Detener migración')
         if solicitada:
             self.siguiente.configure(text='Detención solicitada. Se terminará la ficha u operación en curso antes de guardar el último avance.')
+
+    def _actualizar_texto_lote(self, clave, contenido):
+        texto = getattr(self, f'txt_{clave}_lote')
+        texto.configure(state='normal')
+        texto.delete('1.0', tk.END)
+        texto.insert('1.0', contenido or texto.mensaje_vacio)
+        texto.configure(state='disabled')
 
     def _iniciar(self):
         lote = self.lote_actual()
@@ -1041,44 +1352,100 @@ class PanelLotes(ttk.Frame):
             )
             return
 
-        ventana = tk.Toplevel(self)
-        ventana.title(f'Revisión de registros · {lote.id}')
-        ventana.geometry('1120x720')
-        ventana.minsize(850, 560)
-        ventana.transient(self.winfo_toplevel())
+        raiz = self.winfo_toplevel()
+        estado_ventana_previo = raiz.state()
+        geometria_previa = raiz.geometry()
+        maximizada_por_revision = (
+            raiz.winfo_viewable() and estado_ventana_previo != 'zoomed'
+        )
+        if maximizada_por_revision:
+            raiz.state('zoomed')
+
+        ventana = ttk.Frame(self._historial_contenedor, style='Panel.TFrame')
+        ventana.grid(row=0, column=0, sticky='nsew')
+        self._historial_paginas['revision'] = ventana
         ventana.columnconfigure(0, weight=1)
         ventana.rowconfigure(1, weight=1)
+        cabecera_revision = ttk.Frame(ventana, style='Panel.TFrame')
+        cabecera_revision.grid(row=0, column=0, sticky='ew', padx=ESPACIO_M)
+        cabecera_revision.columnconfigure(1, weight=1)
+        crear_icono(
+            cabecera_revision, 'file', color=PRIMARIO, size=24, fondo=FONDO,
+        ).grid(row=0, column=0, rowspan=2, sticky='w', padx=(0, ESPACIO_S))
         ttk.Label(
-            ventana,
-            text=f'{lote.id} · {os.path.basename(lote.fuente)}',
+            cabecera_revision, text='Revisión individual de fichas',
             style='Titulo.Panel.TLabel',
-        ).grid(row=0, column=0, sticky='w', padx=16, pady=(14, 4))
+        ).grid(row=0, column=1, sticky='w', pady=(8, 2))
+        ttk.Label(
+            cabecera_revision,
+            text=f'{lote.id} · {os.path.basename(lote.fuente)}  —  '
+                 'Selecciona una ficha; puedes recorrerlas con las flechas.',
+            style='Panel.TLabel',
+        ).grid(row=1, column=1, sticky='w', pady=(0, 4))
+
+        def cerrar_revision():
+            self._historial_paginas.pop('revision', None)
+            ventana.destroy()
+            self._mostrar_pagina_historial('detalle')
+            self._cabecera_panel.grid()
+            self.aviso.grid()
+            self._navegacion_panel.grid()
+            if maximizada_por_revision:
+                raiz.state('normal')
+                raiz.geometry(geometria_previa)
+
+        ttk.Button(
+            cabecera_revision, text='← Volver al lote',
+            command=cerrar_revision, style='Secondary.TButton',
+        ).grid(row=0, column=2, sticky='e', padx=(ESPACIO_M, 0))
+        navegacion_pagina = ttk.Frame(cabecera_revision, style='Panel.TFrame')
+        navegacion_pagina.grid(row=1, column=2, sticky='e', padx=(ESPACIO_M, 0))
+        navegacion_pagina.columnconfigure(1, weight=1)
+        estado_pagina = ttk.Label(navegacion_pagina, style='Panel.TLabel')
+        estado_pagina.grid(row=0, column=1, sticky='ew', padx=ESPACIO_XS)
 
         area = ttk.Panedwindow(ventana, orient='horizontal')
         area.grid(row=1, column=0, sticky='nsew', padx=12, pady=8)
         listado = ttk.Frame(area, padding=10, style='Tarjeta.TFrame')
         detalle = ttk.Frame(area, padding=10, style='Tarjeta.TFrame')
-        area.add(listado, weight=2)
-        area.add(detalle, weight=3)
+        area.add(listado, weight=1)
+        area.add(detalle, weight=2)
         listado.columnconfigure(0, weight=1)
         listado.rowconfigure(1, weight=1)
         detalle.columnconfigure(0, weight=1)
-        detalle.rowconfigure(1, weight=1)
+        detalle.rowconfigure(2, weight=1)
 
+        def ajustar_divisor():
+            if not ventana.winfo_exists():
+                return
+            ancho = area.winfo_width()
+            if ancho > 1:
+                area.sashpos(0, max(360, int(ancho * 0.35)))
+
+        ventana.after(250, ajustar_divisor)
+
+        encabezado_lista = ttk.Frame(listado, style='Tarjeta.TFrame')
+        encabezado_lista.grid(row=0, column=0, sticky='ew', pady=(0, 8))
+        crear_icono(
+            encabezado_lista, 'database', color=PRIMARIO, size=18,
+            fondo=SUPERFICIE,
+        ).pack(side='left', padx=(0, ESPACIO_XS))
         ttk.Label(
-            listado, text='Registros MARC21', style='Nombre.TLabel',
-        ).grid(row=0, column=0, sticky='w', pady=(0, 8))
+            encabezado_lista, text='Fichas del lote', style='Nombre.TLabel',
+        ).pack(side='left')
         lista_registros = ttk.Treeview(
-            listado, columns=('ficha', 'estado', 'control'),
+            listado, columns=('ficha', 'estado'),
             show='headings', selectmode='browse', style='Lotes.Treeview',
+            height=18,
         )
         for columna, titulo, ancho in (
-            ('ficha', 'Ficha Access', 100),
-            ('estado', 'Estado', 90),
-            ('control', 'MARC 001', 130),
+            ('ficha', 'Ficha', 120),
+            ('estado', 'Estado', 150),
         ):
             lista_registros.heading(columna, text=titulo)
-            lista_registros.column(columna, width=ancho, minwidth=75, anchor='w')
+            lista_registros.column(
+                columna, width=ancho, minwidth=48, anchor='center',
+            )
         lista_registros.grid(row=1, column=0, sticky='nsew')
         scroll_registros = ttk.Scrollbar(
             listado, orient='vertical', command=lista_registros.yview,
@@ -1086,23 +1453,33 @@ class PanelLotes(ttk.Frame):
         scroll_registros.grid(row=1, column=1, sticky='ns')
         lista_registros.configure(yscrollcommand=scroll_registros.set)
 
+        encabezado_registro = ttk.Frame(detalle, style='Tarjeta.TFrame')
+        encabezado_registro.grid(row=0, column=0, sticky='ew', pady=(0, 8))
+        encabezado_registro.columnconfigure(1, weight=1)
+        crear_icono(
+            encabezado_registro, 'file', color=PRIMARIO, size=18,
+            fondo=SUPERFICIE,
+        ).grid(row=0, column=0, sticky='w', padx=(0, ESPACIO_XS))
         lbl_registro = ttk.Label(
-            detalle, text='Selecciona un registro para revisar sus campos.',
+            encabezado_registro,
+            text='Selecciona un registro para revisar sus campos.',
             style='Nombre.TLabel',
         )
-        lbl_registro.grid(row=0, column=0, sticky='w', pady=(0, 8))
+        lbl_registro.grid(row=0, column=1, sticky='w')
+        acciones_revision = ttk.Frame(encabezado_registro, style='Tarjeta.TFrame')
+        acciones_revision.grid(row=0, column=2, sticky='e')
         lbl_aviso_registro = ttk.Label(
             detalle, text='', style='Tarjeta.TLabel', wraplength=680,
         )
         lbl_aviso_registro.grid(row=1, column=0, sticky='w', pady=(0, 6))
-        vistas_detalle = ttk.Notebook(detalle)
+        vistas_detalle = ttk.Notebook(detalle, style='Revision.TNotebook')
         vistas_detalle.grid(row=2, column=0, sticky='nsew')
         marco_campos = ttk.Frame(vistas_detalle, padding=8)
         marco_ejemplares = ttk.Frame(vistas_detalle, padding=8)
         marco_xml = ttk.Frame(vistas_detalle, padding=8)
-        vistas_detalle.add(marco_campos, text='Campos MARC21')
-        vistas_detalle.add(marco_ejemplares, text='Ejemplares')
-        vistas_detalle.add(marco_xml, text='MARCXML')
+        vistas_detalle.add(marco_campos, text='▤  Campos MARC21')
+        vistas_detalle.add(marco_ejemplares, text='▦  Ejemplares')
+        vistas_detalle.add(marco_xml, text='<>  MARCXML')
         for marco in (marco_campos, marco_ejemplares, marco_xml):
             marco.columnconfigure(0, weight=1)
         marco_campos.rowconfigure(0, weight=1)
@@ -1111,16 +1488,17 @@ class PanelLotes(ttk.Frame):
 
         tabla_campos = ttk.Treeview(
             marco_campos, columns=('etiqueta', 'indicadores', 'contenido'),
-            show='headings', style='Lotes.Treeview',
+            show='headings', style='Lotes.Treeview', height=24,
         )
         for columna, titulo, ancho in (
             ('etiqueta', 'Campo', 75),
             ('indicadores', 'Indicadores', 90),
-            ('contenido', 'Contenido / subcampos', 540),
+            ('contenido', 'Contenido / subcampos', 340),
         ):
             tabla_campos.heading(columna, text=titulo)
             tabla_campos.column(
-                columna, width=ancho, minwidth=65, anchor='w',
+                columna, width=ancho, minwidth=65,
+                anchor='w' if columna == 'contenido' else 'center',
                 stretch=columna == 'contenido',
             )
         tabla_campos.grid(row=0, column=0, sticky='nsew')
@@ -1136,13 +1514,20 @@ class PanelLotes(ttk.Frame):
             yscrollcommand=scroll_campos.set, xscrollcommand=scroll_campos_x.set,
         )
 
-        columnas_ejemplar = (
-            'codigo', 'biblioteca', 'sucursal', 'volumen', 'numero',
-            'tomo', 'accesible', 'fecha', 'signatura',
+        campos_ejemplar = (
+            ('num_adqui', 'Núm. adquisición'),
+            ('biblioteca', 'Biblioteca'),
+            ('branch_koha', 'Sucursal Koha'),
+            ('volumen', 'Volumen'),
+            ('ejemplar', 'Ejemplar'),
+            ('tomo', 'Tomo'),
+            ('accesible', 'Accesible'),
+            ('fecha_ingreso', 'Fecha ingreso'),
+            ('signatura', 'Signatura'),
         )
         tabla_ejemplares = ttk.Treeview(
-            marco_ejemplares, columns=columnas_ejemplar,
-            show='headings', style='Lotes.Treeview',
+            marco_ejemplares, columns=('dato', 'valor'),
+            show='tree headings', style='Lotes.Treeview',
         )
         lbl_estado_ejemplares = ttk.Label(
             marco_ejemplares, text='', style='Panel.TLabel', wraplength=700,
@@ -1150,29 +1535,18 @@ class PanelLotes(ttk.Frame):
         lbl_estado_ejemplares.grid(
             row=0, column=0, columnspan=2, sticky='w', pady=(0, 7),
         )
-        titulos_ejemplar = (
-            'Núm. adquisición', 'Biblioteca', 'Sucursal Koha', 'Volumen',
-            'Ejemplar', 'Tomo', 'Accesible', 'Fecha ingreso', 'Signatura',
-        )
-        for columna, titulo in zip(columnas_ejemplar, titulos_ejemplar):
-            tabla_ejemplares.heading(columna, text=titulo)
-            tabla_ejemplares.column(
-                columna, width=105, minwidth=75, anchor='w',
-                stretch=columna in ('codigo', 'sucursal', 'signatura'),
-            )
+        tabla_ejemplares.heading('#0', text='Ejemplar')
+        tabla_ejemplares.column('#0', width=120, minwidth=95, stretch=False)
+        tabla_ejemplares.heading('dato', text='Dato')
+        tabla_ejemplares.column('dato', width=155, minwidth=115, stretch=False)
+        tabla_ejemplares.heading('valor', text='Valor')
+        tabla_ejemplares.column('valor', width=320, minwidth=200, stretch=True)
         tabla_ejemplares.grid(row=1, column=0, sticky='nsew')
         scroll_ejemplares = ttk.Scrollbar(
             marco_ejemplares, orient='vertical', command=tabla_ejemplares.yview,
         )
         scroll_ejemplares.grid(row=1, column=1, sticky='ns')
-        scroll_ejemplares_x = ttk.Scrollbar(
-            marco_ejemplares, orient='horizontal', command=tabla_ejemplares.xview,
-        )
-        scroll_ejemplares_x.grid(row=2, column=0, sticky='ew')
-        tabla_ejemplares.configure(
-            yscrollcommand=scroll_ejemplares.set,
-            xscrollcommand=scroll_ejemplares_x.set,
-        )
+        tabla_ejemplares.configure(yscrollcommand=scroll_ejemplares.set)
 
         texto_xml = tk.Text(
             marco_xml, wrap='none', font=('Consolas', 10),
@@ -1194,14 +1568,58 @@ class PanelLotes(ttk.Frame):
             state='disabled',
         )
 
-        barra = ttk.Frame(ventana, padding=(12, 4, 12, 12))
-        barra.grid(row=2, column=0, sticky='ew')
-        barra.columnconfigure(1, weight=1)
-        estado_pagina = ttk.Label(barra, style='Panel.TLabel')
-        estado_pagina.grid(row=0, column=1, sticky='ew', padx=8)
+        def boton_con_icono(parent, nombre_icono, texto, comando, estado='normal'):
+            grupo = ttk.Frame(parent, style='Tarjeta.TFrame')
+            grupo.pack(side='left', padx=(0, ESPACIO_S))
+            icono = crear_icono(
+                grupo, nombre_icono, color=PRIMARIO, size=16, fondo=SUPERFICIE,
+            )
+            icono.pack(side='left', padx=(0, ESPACIO_XS))
+            boton = ttk.Button(
+                grupo, text=texto, command=comando, state=estado,
+                style='RevisionAction.TButton',
+            )
+            boton.pack(side='left')
+            icono.configure(cursor='hand2')
+            icono.bind('<Button-1>', lambda _evento: boton.invoke())
+            return boton
+
         inicio_pagina = 0
         registros_actuales = []
         registro_seleccionado = [None]
+
+        def abrir_pagina_auxiliar(clave, titulo, nombre_icono):
+            pagina = ttk.Frame(self._historial_contenedor, style='Panel.TFrame')
+            pagina.grid(row=0, column=0, sticky='nsew')
+            pagina.columnconfigure(0, weight=1)
+            pagina.rowconfigure(1, weight=1)
+            self._historial_paginas[clave] = pagina
+            encabezado = ttk.Frame(pagina, style='Panel.TFrame')
+            encabezado.grid(row=0, column=0, sticky='ew', padx=ESPACIO_M)
+            encabezado.columnconfigure(1, weight=1)
+            crear_icono(
+                encabezado, nombre_icono, color=PRIMARIO, size=24, fondo=FONDO,
+            ).grid(row=0, column=0, sticky='w', padx=(0, ESPACIO_S))
+            ttk.Label(
+                encabezado, text=titulo, style='Titulo.Panel.TLabel',
+            ).grid(row=0, column=1, sticky='w', pady=ESPACIO_S)
+            ttk.Button(
+                encabezado, text='← Volver a revisión',
+                command=lambda: cerrar_pagina_auxiliar(clave, pagina),
+                style='Secondary.TButton',
+            ).grid(row=0, column=2, sticky='e')
+            contenido = ttk.Frame(pagina, style='Panel.TFrame', padding=ESPACIO_M)
+            contenido.grid(row=1, column=0, sticky='nsew')
+            contenido.columnconfigure(0, weight=1)
+            contenido.rowconfigure(1, weight=1)
+            self._mostrar_pagina_historial(clave)
+            return contenido, pagina
+
+        def cerrar_pagina_auxiliar(clave, pagina):
+            if self._historial_paginas.get(clave) is pagina:
+                self._historial_paginas.pop(clave)
+            pagina.destroy()
+            self._mostrar_pagina_historial('revision')
 
         def mostrar_registro(_evento=None):
             seleccion = lista_registros.selection()
@@ -1235,22 +1653,28 @@ class PanelLotes(ttk.Frame):
             try:
                 campos, aviso = campos_para_revision(registro)
             except ValueError as exc:
-                lbl_aviso_registro.config(text='')
-                messagebox.showerror(
-                    'Registro MARC inválido', str(exc), parent=ventana,
+                campos = []
+                aviso = f'No se pudieron cargar los campos MARC: {exc}'
+                tabla_campos.insert(
+                    '', 'end',
+                    values=('—', '—', 'Campos MARC no disponibles para esta ficha.'),
                 )
-                return
             lbl_aviso_registro.config(
-                text=aviso, foreground='#a36d23' if aviso else '#686168',
+                text=aviso,
+                foreground=ADVERTENCIA if aviso else TEXTO_MUTADO,
             )
             if aviso and self.politica(
                     lote, self.demo.get()).get('proponer_correccion'):
                 boton_reparar.configure(state='normal')
-            for campo in campos:
-                tabla_campos.insert(
-                    '', 'end',
-                    values=(campo['etiqueta'], campo['indicadores'], campo['contenido']),
-                )
+            if campos:
+                for campo in campos:
+                    tabla_campos.insert(
+                        '', 'end',
+                        values=(
+                            campo['etiqueta'], campo['indicadores'],
+                            campo['contenido'],
+                        ),
+                    )
             ejemplares = registro.get('ejemplares', [])
             recuperados_marc = False
             if not ejemplares:
@@ -1280,21 +1704,24 @@ class PanelLotes(ttk.Frame):
                     text='No hay ejemplares guardados ni campos MARC 952 para esta ficha.',
                     foreground='#686168',
                 )
-            for ejemplar in ejemplares:
+            for indice, ejemplar in enumerate(ejemplares, start=1):
+                iid = f'ejemplar-{indice}'
                 tabla_ejemplares.insert(
-                    '', 'end',
-                    values=tuple(
-                        ejemplar.get(clave) if ejemplar.get(clave) is not None else ''
-                        for clave in (
-                            'num_adqui', 'biblioteca', 'branch_koha', 'volumen',
-                            'ejemplar', 'tomo', 'accesible', 'fecha_ingreso',
-                            'signatura',
-                        )
-                    ),
+                    '', 'end', iid=iid, text=f'Ejemplar {indice}',
+                    values=('', ''), open=True,
                 )
+                for clave, etiqueta in campos_ejemplar:
+                    valor = ejemplar.get(clave)
+                    tabla_ejemplares.insert(
+                        iid, 'end', text='',
+                        values=(etiqueta, '—' if valor is None or valor == '' else valor),
+                    )
             texto_xml.configure(state='normal')
             texto_xml.delete('1.0', tk.END)
-            texto_xml.insert('1.0', registro['marca_marcxml'])
+            texto_xml.insert(
+                '1.0', registro.get('marca_marcxml') or
+                'No hay MARCXML almacenado para esta ficha.',
+            )
             texto_xml.configure(state='disabled')
 
         def registrar_observacion():
@@ -1302,15 +1729,11 @@ class PanelLotes(ttk.Frame):
             if (registro is None or not self.politica(
                     lote, self.demo.get()).get('registrar_observacion')):
                 return
-            dialogo = tk.Toplevel(ventana)
-            dialogo.title(
-                f'Observaciones · ficha {registro["id_ficha_acceso"]}',
+            dialogo, pagina_observaciones = abrir_pagina_auxiliar(
+                'observaciones',
+                f'Observaciones de la ficha {registro["id_ficha_acceso"]}',
+                'activity',
             )
-            dialogo.geometry('760x510')
-            dialogo.minsize(620, 420)
-            dialogo.transient(ventana)
-            dialogo.columnconfigure(0, weight=1)
-            dialogo.rowconfigure(1, weight=1)
             ttk.Label(
                 dialogo,
                 text='Observaciones previas de esta ficha (autor, fecha y nota):',
@@ -1327,7 +1750,8 @@ class PanelLotes(ttk.Frame):
                 tabla_notas.heading(columna, text=titulo)
                 tabla_notas.column(
                     columna, width=ancho, minwidth=90,
-                    stretch=columna == 'nota', anchor='w',
+                    stretch=columna == 'nota',
+                    anchor='w' if columna == 'nota' else 'center',
                 )
             tabla_notas.grid(
                 row=1, column=0, sticky='nsew', padx=12, pady=(0, 8),
@@ -1393,8 +1817,10 @@ class PanelLotes(ttk.Frame):
             botones_observacion = ttk.Frame(dialogo, padding=12)
             botones_observacion.grid(row=4, column=0, sticky='ew')
             ttk.Button(
-                botones_observacion, text='Cerrar',
-                command=dialogo.destroy,
+                botones_observacion, text='Volver a revisión',
+                command=lambda: cerrar_pagina_auxiliar(
+                    'observaciones', pagina_observaciones,
+                ),
             ).pack(side='right')
             ttk.Button(
                 botones_observacion, text='Guardar observación',
@@ -1443,12 +1869,11 @@ class PanelLotes(ttk.Frame):
                     'Recuperación del registro', aviso_edicion, parent=ventana,
                 )
 
-            editor = tk.Toplevel(ventana)
-            editor.title(f'Proponer corrección · ficha {registro["id_ficha_acceso"]}')
-            editor.geometry('1120x700')
-            editor.minsize(900, 600)
-            editor.transient(ventana)
-            editor.grab_set()
+            editor, pagina_editor = abrir_pagina_auxiliar(
+                'editor',
+                f'Proponer corrección · ficha {registro["id_ficha_acceso"]}',
+                'settings',
+            )
             editor.columnconfigure(0, weight=1)
             editor.rowconfigure(2, weight=1)
             ttk.Label(
@@ -1479,7 +1904,8 @@ class PanelLotes(ttk.Frame):
                 tabla_edicion.heading(columna, text=titulo)
                 tabla_edicion.column(
                     columna, width=ancho, minwidth=75,
-                    stretch=columna == 'contenido', anchor='w',
+                    stretch=columna == 'contenido',
+                    anchor='w' if columna == 'contenido' else 'center',
                 )
             tabla_edicion.grid(row=0, column=0, sticky='nsew')
             edicion_scroll = ttk.Scrollbar(
@@ -1656,7 +2082,7 @@ class PanelLotes(ttk.Frame):
                         'No se pudo proponer la corrección', str(exc), parent=editor,
                     )
                     return
-                editor.destroy()
+                cerrar_pagina_auxiliar('editor', pagina_editor)
                 messagebox.showinfo(
                     'Corrección pendiente',
                     f'La propuesta #{propuesta_id} quedó pendiente de revisión '
@@ -1668,7 +2094,8 @@ class PanelLotes(ttk.Frame):
             barra_editor = ttk.Frame(editor, padding=(12, 6, 12, 12))
             barra_editor.grid(row=5, column=0, sticky='ew')
             ttk.Button(
-                barra_editor, text='Cancelar', command=editor.destroy,
+                barra_editor, text='Volver a revisión',
+                command=lambda: cerrar_pagina_auxiliar('editor', pagina_editor),
             ).pack(side='right')
             ttk.Button(
                 barra_editor, text='Enviar a aprobación',
@@ -1695,13 +2122,10 @@ class PanelLotes(ttk.Frame):
                 )
                 return
 
-            revision = tk.Toplevel(ventana)
-            revision.title(f'Correcciones pendientes · {lote.id}')
-            revision.geometry('1180x690')
-            revision.minsize(900, 520)
-            revision.transient(ventana)
+            revision, pagina_propuestas = abrir_pagina_auxiliar(
+                'propuestas', f'Correcciones pendientes · {lote.id}', 'check',
+            )
             revision.columnconfigure(0, weight=1)
-            revision.rowconfigure(1, weight=1)
             ttk.Label(
                 revision,
                 text='Compara la versión actual con la propuesta antes de resolverla.',
@@ -1716,7 +2140,7 @@ class PanelLotes(ttk.Frame):
                 ('fecha', 'Fecha', 180),
             ):
                 propuesta_tabla.heading(columna, text=titulo)
-                propuesta_tabla.column(columna, width=ancho, anchor='w')
+                propuesta_tabla.column(columna, width=ancho, anchor='center')
             propuesta_tabla.grid(row=1, column=0, sticky='new', padx=14)
             for propuesta in propuestas:
                 propuesta_tabla.insert(
@@ -1746,8 +2170,11 @@ class PanelLotes(ttk.Frame):
                     ('contenido', 'Subcampos', 380),
                 ):
                     tabla.heading(columna, text=texto)
-                    tabla.column(columna, width=ancho, anchor='w',
-                                  stretch=columna == 'contenido')
+                    tabla.column(
+                        columna, width=ancho,
+                        anchor='w' if columna == 'contenido' else 'center',
+                        stretch=columna == 'contenido',
+                    )
                 tabla.grid(row=1, column=0, sticky='nsew')
                 scroll = ttk.Scrollbar(
                     bloque, orient='vertical', command=tabla.yview,
@@ -1832,7 +2259,7 @@ class PanelLotes(ttk.Frame):
                         parent=revision,
                     )
                     return
-                revision.destroy()
+                cerrar_pagina_auxiliar('propuestas', pagina_propuestas)
                 self.actualizar(seleccionar=lote.id)
                 cargar_pagina(inicio_pagina)
 
@@ -1840,7 +2267,10 @@ class PanelLotes(ttk.Frame):
             botonera = ttk.Frame(revision, padding=12)
             botonera.grid(row=4, column=0, sticky='ew')
             ttk.Button(
-                botonera, text='Cerrar', command=revision.destroy,
+                botonera, text='Volver a revisión',
+                command=lambda: cerrar_pagina_auxiliar(
+                    'propuestas', pagina_propuestas,
+                ),
             ).pack(side='right')
             ttk.Button(
                 botonera, text='Rechazar', command=lambda: resolver_seleccion(False),
@@ -1876,7 +2306,6 @@ class PanelLotes(ttk.Frame):
                     '', 'end', iid=ficha,
                     values=(
                         ficha, registro.get('estado') or '',
-                        registro.get('id_control') or '',
                     ),
                 )
             fin = inicio_pagina + len(registros_actuales)
@@ -1895,43 +2324,40 @@ class PanelLotes(ttk.Frame):
 
         lista_registros.bind('<<TreeviewSelect>>', mostrar_registro)
         boton_anterior = ttk.Button(
-            barra, text='← Anterior',
+            navegacion_pagina, text='← Anterior',
             command=lambda: cargar_pagina(max(0, inicio_pagina - tamano_pagina)),
         )
-        boton_anterior.grid(row=0, column=0)
+        boton_anterior.grid(row=0, column=0, sticky='w')
         politica_revision = self.politica(lote, self.demo.get())
-        boton_observaciones = ttk.Button(
-            barra, text='Observaciones',
-            command=registrar_observacion,
-            state='disabled',
+        boton_observaciones = boton_con_icono(
+            acciones_revision, 'activity', 'Observaciones',
+            registrar_observacion, 'disabled',
         )
-        boton_observaciones.grid(row=0, column=2, padx=(0, 6))
-        boton_reparar = ttk.Button(
-            barra, text='Proponer reparación XML',
-            command=proponer_reparacion_xml, state='disabled',
+        boton_reparar = boton_con_icono(
+            acciones_revision, 'refresh', 'Proponer reparación XML',
+            proponer_reparacion_xml, 'disabled',
         )
-        boton_reparar.grid(row=0, column=3, padx=(0, 6))
-        boton_editar = ttk.Button(
-            barra, text='Corregir / proponer',
-            command=editar_registro,
-            state='normal' if politica_revision.get('proponer_correccion') else 'disabled',
+        boton_editar = boton_con_icono(
+            acciones_revision, 'settings', 'Corregir / proponer',
+            editar_registro,
+            estado='normal' if politica_revision.get('proponer_correccion') else 'disabled',
         )
-        boton_editar.grid(row=0, column=4, padx=(0, 6))
-        boton_propuestas = ttk.Button(
-            barra, text='Revisar propuestas',
-            command=revisar_propuestas,
-            state='normal' if politica_revision.get('aprobar_correccion') else 'disabled',
+        boton_propuestas = boton_con_icono(
+            acciones_revision, 'check', 'Revisar propuestas',
+            revisar_propuestas,
+            'normal' if politica_revision.get('aprobar_correccion') else 'disabled',
         )
-        boton_propuestas.grid(row=0, column=5, padx=(0, 6))
         boton_siguiente = ttk.Button(
-            barra, text='Siguiente →',
+            navegacion_pagina, text='Siguiente →',
             command=lambda: cargar_pagina(inicio_pagina + tamano_pagina),
         )
-        boton_siguiente.grid(row=0, column=6)
-        ttk.Button(barra, text='Cerrar', command=ventana.destroy).grid(
-            row=0, column=7, padx=(8, 0),
-        )
+        boton_siguiente.grid(row=0, column=2, sticky='e')
+        self._cabecera_panel.grid_remove()
+        self.aviso.grid_remove()
+        self._navegacion_panel.grid_remove()
+        self._mostrar_pagina_historial('revision')
         cargar_pagina(0)
+        ventana.after_idle(lista_registros.focus_set)
 
     def _detener(self):
         lote = self.lote_actual()
@@ -1943,39 +2369,15 @@ class PanelLotes(ttk.Frame):
         if lote and self.politica(lote, self.demo.get()).get('reprocesar'):
             self.reprocesar(lote.id)
 
-    def _ventana_texto(self, titulo, contenido):
-        ventana = tk.Toplevel(self)
-        ventana.title(titulo)
-        ventana.geometry('700x430')
-        ventana.transient(self.winfo_toplevel())
-        ventana.columnconfigure(0, weight=1)
-        ventana.rowconfigure(0, weight=1)
-        marco = ttk.Frame(ventana, padding=12)
-        marco.grid(row=0, column=0, sticky='nsew')
-        texto = tk.Text(marco, wrap='word', font=('Segoe UI', 10))
-        texto.pack(side='left', fill='both', expand=True)
-        barra = ttk.Scrollbar(marco, command=texto.yview)
-        barra.pack(side='right', fill='y')
-        texto.configure(yscrollcommand=barra.set)
-        texto.insert('1.0', contenido)
-        texto.configure(state='disabled')
-        ttk.Button(ventana, text='Cerrar', command=ventana.destroy).grid(row=1, column=0, pady=(0, 12))
-
     def _incidencias(self):
         lote = self.lote_actual()
         if lote and self.politica(lote, self.demo.get())['incidencias']:
-            detalle = '\n\n'.join(f'{item["referencia"]}\n{item["mensaje"]}' for item in lote.incidencias)
-            self._ventana_texto(f'Incidencias · {lote.id}', f'{lote.errores} registros con error. Se conservan hasta 100 incidencias recientes.\n\n{detalle}')
+            self._mostrar_detalle('incidencias')
 
     def _actividad(self):
         lote = self.lote_actual()
         if lote:
-            tecnico = (
-                f'Versión de mapeo: {lote.version_mapeo or "Sin registrar"}\n'
-                f'Huella del mapeo: {lote.huella_mapeo or "Sin registrar"}'
-            )
-            eventos = '\n\n'.join(f'{item["fecha"]}\n{item["mensaje"]}' for item in reversed(lote.actividad))
-            self._ventana_texto(f'Actividad · {lote.id}', tecnico + '\n\n' + eventos)
+            self._mostrar_detalle('actividad')
 
     def _resumen(self):
         lote = self.lote_actual()

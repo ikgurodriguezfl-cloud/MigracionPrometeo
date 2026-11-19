@@ -38,11 +38,8 @@ def main():
         for widget in root.winfo_children():
             widget.destroy()
 
-        # Ajustar titulo y tamanio para la pantalla principal
+        # La aplicación principal define su geometría según la resolución disponible.
         root.title('NexoMARC | Migración Access a MARC21 (Koha)')
-        root.geometry('900x650')
-        root.minsize(800, 600)
-        root.resizable(True, True)
 
         # Cargar la aplicacion principal
         try:
