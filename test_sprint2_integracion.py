@@ -510,12 +510,27 @@ class InterfazSprint2Tests(unittest.TestCase):
                 ventana_principal.geometry.return_value = '1280x720+0+0'
                 panel.winfo_toplevel = Mock(return_value=ventana_principal)
                 panel.listar_observaciones = Mock(return_value=[])
+                def campo_xml(tag, valor):
+                    return (
+                        f'<datafield tag="{tag}" ind1=" " ind2=" ">'
+                        f'<subfield code="a">{valor}</subfield></datafield>'
+                    )
+
+                original = registro['marca_marcxml'].removesuffix('</record>')
+                materia = campo_xml('650', 'Materia existente')
+                actual = (original + campo_xml('020', '968-409-007-2')
+                          + materia + campo_xml('500', 'Nota eliminada') + '</record>')
+                propuesta = (
+                    original.replace('00000nam', '00144nam').replace('2200000', '2200061')
+                    + campo_xml('020', '9684090072')
+                    + campo_xml('650', 'Materia nueva') + materia + '</record>'
+                )
                 panel.listar_propuestas = Mock(return_value=[{
                     'id': 5, 'id_ficha_acceso': 12, 'propuesto_por': 'revisora',
                     'fecha_creacion': '2026-01-03',
-                    'marca_marcxml_actual': registro['marca_marcxml'],
+                    'marca_marcxml_actual': actual,
                     'marca_iso2709_actual': None,
-                    'marca_marcxml_propuesta': registro['marca_marcxml'],
+                    'marca_marcxml_propuesta': propuesta,
                     'marca_iso2709_propuesta': None,
                 }])
                 panel._revisar()
@@ -606,6 +621,28 @@ class InterfazSprint2Tests(unittest.TestCase):
 
                 invocar_boton('Revisar propuestas')
                 validar_vista_interna('propuestas')
+                tablas_comparacion = [
+                    widget for widget in recorrer(raiz)
+                    if isinstance(widget, ttk.Treeview) and
+                    widget.cget('columns') == ('tag', 'ind', 'cambio', 'contenido')
+                ]
+                def filas(tabla):
+                    return [
+                        (tabla.item(fila, 'values')[0], tabla.item(fila, 'values')[2],
+                         tabla.item(fila, 'tags'))
+                        for fila in tabla.get_children()
+                    ]
+
+                self.assertEqual(filas(tablas_comparacion[0]), [
+                    ('LDR', '', ''), ('001', '', ''), ('245', '', ''),
+                    ('020', 'Modificado', ('Modificado',)), ('650', '', ''),
+                    ('500', 'Eliminado', ('Eliminado',)),
+                ])
+                self.assertEqual(filas(tablas_comparacion[1]), [
+                    ('LDR', '', ''), ('001', '', ''), ('245', '', ''),
+                    ('020', 'Modificado', ('Modificado',)),
+                    ('650', 'Agregado', ('Agregado',)), ('650', '', ''),
+                ])
                 invocar_boton('Volver a revisión')
                 validar_vista_interna('revision')
                 invocar_boton('← Volver al lote')

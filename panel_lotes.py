@@ -1,4 +1,5 @@
 """Panel Tkinter del sprint 2, integrado en el Notebook de MigracionApp."""
+from collections import defaultdict, deque
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
@@ -212,26 +213,29 @@ def campos_desde_marcxml(contenido):
             campos.append({
                 'etiqueta': 'LDR', 'indicadores': '',
                 'contenido': (elemento.text or '').strip(),
+                'valor': elemento.text or '',
             })
         elif nombre == 'controlfield':
             campos.append({
                 'etiqueta': elemento.attrib.get('tag', ''),
                 'indicadores': '',
                 'contenido': (elemento.text or '').strip(),
+                'valor': elemento.text or '',
             })
         elif nombre == 'datafield':
-            subcampos = []
-            for subcampo in elemento:
-                if subcampo.tag.rsplit('}', 1)[-1] == 'subfield':
-                    codigo = subcampo.attrib.get('code', '')
-                    subcampos.append(f'${codigo} {subcampo.text or ""}'.strip())
+            subcampos = tuple(
+                (subcampo.get('code', ''), subcampo.text or '')
+                for subcampo in elemento
+                if subcampo.tag.rsplit('}', 1)[-1] == 'subfield'
+            )
             campos.append({
                 'etiqueta': elemento.attrib.get('tag', ''),
                 'indicadores': ''.join(
                     elemento.attrib.get(clave, ' ').strip() or '#'
                     for clave in ('ind1', 'ind2')
                 ),
-                'contenido': '  |  '.join(subcampos),
+                'contenido': '  |  '.join(f'${codigo} {valor}'.strip() for codigo, valor in subcampos),
+                'valor': subcampos,
             })
     if not campos:
         raise ValueError('El registro MARCXML no contiene campos para mostrar.')
@@ -252,26 +256,26 @@ def campos_desde_iso2709(contenido):
     campos = [{
         'etiqueta': 'LDR', 'indicadores': '',
         'contenido': str(registro.leader).strip(),
+        'valor': str(registro.leader),
     }]
     for campo in registro.fields:
         if campo.is_control_field():
             campos.append({
                 'etiqueta': campo.tag, 'indicadores': '',
                 'contenido': campo.data or '',
+                'valor': campo.data or '',
             })
         else:
-            subcampos = []
-            for subcampo in campo.subfields:
-                codigo = getattr(subcampo, 'code', None)
-                valor = getattr(subcampo, 'value', None)
-                if codigo is not None:
-                    subcampos.append(f'${codigo} {valor or ""}'.strip())
+            subcampos = tuple(
+                (subcampo.code, subcampo.value or '') for subcampo in campo.subfields
+            )
             campos.append({
                 'etiqueta': campo.tag,
                 'indicadores': ''.join(
                     indicador.strip() or '#' for indicador in campo.indicators
                 ),
-                'contenido': '  |  '.join(subcampos),
+                'contenido': '  |  '.join(f'${codigo} {valor}'.strip() for codigo, valor in subcampos),
+                'valor': subcampos,
             })
     return campos
 
@@ -292,6 +296,41 @@ def campos_para_revision(registro):
             'Aviso: no se pudo leer el MARCXML almacenado. Los campos se '
             'muestran recuperados desde la copia ISO2709.'
         )
+
+
+def cambios_propuesta(actuales, propuestos):
+    """Marca las diferencias y empareja primero las ocurrencias idénticas."""
+    def clave(campo):
+        etiqueta = campo['etiqueta']
+        valor = campo['valor']
+        if etiqueta == 'LDR' and len(valor) == 24:
+            # Longitud y dirección base se recalculan al guardar ISO2709.
+            valor = valor[5:12] + valor[17:]
+        return etiqueta, campo['indicadores'], valor
+
+    por_valor = defaultdict(deque)
+    for indice, campo in enumerate(actuales):
+        por_valor[clave(campo)].append(indice)
+
+    cambios_actuales = ['Eliminado'] * len(actuales)
+    cambios_propuestos = ['Agregado'] * len(propuestos)
+    for indice, campo in enumerate(propuestos):
+        coincidencias = por_valor.get(clave(campo))
+        if coincidencias:
+            cambios_actuales[coincidencias.popleft()] = ''
+            cambios_propuestos[indice] = ''
+
+    por_etiqueta = defaultdict(deque)
+    for indice, (campo, cambio) in enumerate(zip(actuales, cambios_actuales)):
+        if cambio == 'Eliminado':
+            por_etiqueta[campo['etiqueta']].append(indice)
+    for indice, (campo, cambio) in enumerate(zip(propuestos, cambios_propuestos)):
+        pendientes = por_etiqueta.get(campo['etiqueta'])
+        if cambio == 'Agregado' and pendientes:
+            cambios_actuales[pendientes.popleft()] = 'Modificado'
+            cambios_propuestos[indice] = 'Modificado'
+
+    return cambios_actuales, cambios_propuestos
 
 
 def ejemplares_desde_registro_marc(registro):
@@ -2309,12 +2348,12 @@ class PanelLotes(ttk.Frame):
                     row=0, column=0, sticky='w', pady=(0, 6),
                 )
                 tabla = ttk.Treeview(
-                    bloque, columns=('tag', 'ind', 'contenido'),
+                    bloque, columns=('tag', 'ind', 'cambio', 'contenido'),
                     show='headings', style='Lotes.Treeview',
                 )
                 for columna, texto, ancho in (
                     ('tag', 'Campo', 65), ('ind', 'Ind.', 60),
-                    ('contenido', 'Subcampos', 380),
+                    ('cambio', 'Cambio', 100), ('contenido', 'Subcampos', 280),
                 ):
                     tabla.heading(columna, text=texto)
                     tabla.column(
@@ -2328,6 +2367,9 @@ class PanelLotes(ttk.Frame):
                 )
                 scroll.grid(row=1, column=1, sticky='ns')
                 tabla.configure(yscrollcommand=scroll.set)
+                tabla.tag_configure('Modificado', background=ADVERTENCIA_SUAVE, foreground=TEXTO)
+                tabla.tag_configure('Agregado', background=EXITO_SUAVE, foreground=TEXTO)
+                tabla.tag_configure('Eliminado', background=ERROR_SUAVE, foreground=TEXTO)
                 comparacion.add(bloque, weight=1)
                 vistas_comparacion.append(tabla)
 
@@ -2364,16 +2406,24 @@ class PanelLotes(ttk.Frame):
                         'Propuesta inválida', str(exc), parent=revision,
                     )
                     return
-                for tabla, campos in zip(vistas_comparacion, campos_versiones):
+                cambios_versiones = cambios_propuesta(*campos_versiones)
+                for tabla, campos, cambios in zip(vistas_comparacion, campos_versiones, cambios_versiones):
                     tabla.delete(*tabla.get_children())
-                    for campo in campos:
-                        tabla.insert(
+                    primera_diferencia = None
+                    for campo, cambio in zip(campos, cambios):
+                        fila = tabla.insert(
                             '', 'end',
                             values=(
                                 campo['etiqueta'], campo['indicadores'],
-                                campo['contenido'],
+                                cambio, campo['contenido'],
                             ),
+                            tags=(cambio,) if cambio else (),
                         )
+                        if cambio and primera_diferencia is None:
+                            primera_diferencia = fila
+                    tabla.yview_moveto(0)
+                    if primera_diferencia is not None:
+                        tabla.see(primera_diferencia)
                 estado_propuesta.config(
                     text=f'Propuesta #{propuesta["id"]} · ficha '
                          f'{propuesta["id_ficha_acceso"]} · autor: '
