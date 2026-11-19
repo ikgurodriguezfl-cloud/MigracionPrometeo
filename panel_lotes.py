@@ -453,7 +453,7 @@ class PanelLotes(ttk.Frame):
     def __init__(self, parent, listar, politica, iniciar, exportar, revisar,
                  proponer, listar_propuestas, resolver_propuesta,
                  listar_observaciones, registrar_observacion,
-                 conexiones, detener, reprocesar, obtener, publicar, framework=None):
+                 conexiones, detener, reprocesar, obtener, publicar, framework=None, usar_base=None):
         super().__init__(parent, padding=24, style='Panel.TFrame')
         self.framework = framework or dict
         self.listar = listar
@@ -463,6 +463,7 @@ class PanelLotes(ttk.Frame):
         self.iniciar = iniciar
         self.exportar = exportar
         self.revisar = revisar
+        self.usar_base = usar_base
         self.proponer = proponer
         self.listar_propuestas = listar_propuestas
         self.resolver_propuesta = resolver_propuesta
@@ -961,8 +962,20 @@ class PanelLotes(ttk.Frame):
         self.btn_reprocesar = ttk.Button(acciones, text='Reprocesar pendientes', command=self._reprocesar)
         self.btn_exportar = ttk.Button(acciones, text='Exportar MARC21', command=self._exportar)
         self.btn_revisar_detalle = ttk.Button(acciones, text='Revisar fichas', command=self._revisar)
-        self.btn_revisar_incidencias = ttk.Button(self.detalle_incidencias, text='Revisar fichas del lote', command=self._revisar)
-        self.btn_revisar_incidencias.grid(row=2, column=0, sticky='w', pady=ESPACIO_XS)
+        acciones_incidencias = ttk.Frame(self.detalle_incidencias, style='Tarjeta.TFrame')
+        acciones_incidencias.grid(row=2, column=0, sticky='ew', pady=ESPACIO_XS)
+        self.btn_revisar_incidencias = ttk.Button(
+            acciones_incidencias, text='Revisar fichas del lote', command=self._revisar,
+        )
+        self.btn_revisar_incidencias.pack(side='left')
+        self.btn_usar_base_lote = ttk.Button(
+            acciones_incidencias, text='Usar base del lote', command=self._usar_base_lote,
+        )
+        self.aviso_destino_revision = ttk.Label(
+            self.detalle_incidencias, style='Tarjeta.TLabel', wraplength=600,
+        )
+        self.aviso_destino_revision.grid(row=3, column=0, sticky='w')
+        self.aviso_destino_revision.grid_remove()
         self.btn_incidencias = ttk.Button(acciones, text='Ver incidencias', command=self._incidencias)
         self.btn_resumen = ttk.Button(acciones, text='Guardar reporte', command=self._resumen)
         for indice, boton in enumerate((
@@ -1361,6 +1374,16 @@ class PanelLotes(ttk.Frame):
         self.btn_abrir_detalle.configure(
             state='normal' if lote else 'disabled',
         )
+        aviso_destino = politica.get('aviso_destino_revision')
+        if aviso_destino:
+            self.aviso_destino_revision.configure(text=aviso_destino)
+            self.aviso_destino_revision.grid()
+        else:
+            self.aviso_destino_revision.grid_remove()
+        if self.usar_base and politica.get('usar_base_lote'):
+            self.btn_usar_base_lote.pack(side='left', padx=(ESPACIO_S, 0))
+        else:
+            self.btn_usar_base_lote.pack_forget()
         solicitada = politica['detencion_solicitada']
         self.btn_detener.configure(text='Deteniendo…' if solicitada else 'Detener migración')
         if solicitada:
@@ -1382,6 +1405,11 @@ class PanelLotes(ttk.Frame):
         lote = self.lote_actual()
         if self.politica(lote, self.demo.get())['exportar']:
             self.exportar(lote.id)
+
+    def _usar_base_lote(self):
+        lote = self.lote_actual()
+        if self.usar_base and self.politica(lote, self.demo.get()).get('usar_base_lote'):
+            self.usar_base(lote.id)
 
     def _revisar(self):
         lote = self.lote_actual()

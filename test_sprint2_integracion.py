@@ -389,6 +389,45 @@ class IntegracionSprint2Tests(unittest.TestCase):
 
 
 class InterfazSprint2Tests(unittest.TestCase):
+    def test_aprobacion_puede_revisar_lote_en_otra_base_del_mismo_servidor(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            historial = HistorialLotes(Path(carpeta) / 'lotes.json')
+            lote = historial.recibir('copia.mdb', 1)
+            historial.actualizar(
+                lote.id, estado='concluido', etapa='finalizado', correctos=1,
+                fichas_correctas=[11],
+                destino={'host': 'localhost', 'port': 3306, 'database': 'base_del_lote'},
+            )
+            auth = Mock()
+            auth.get_profile.return_value = 'Aprobacion'
+            auth.get_username.return_value = 'aprobadora'
+            raiz = tk.Tk()
+            raiz.withdraw()
+            config = {'mysql': {'host': 'localhost', 'port': 3306, 'database': 'base_guardada'}}
+            with patch.object(MigracionApp, 'cargar_config', return_value=config):
+                app = MigracionApp(raiz, historial, auth_service=auth, session_token='sesion')
+            try:
+                panel = app.panel_lotes
+                panel.seleccionar_real(lote.id)
+                panel._mostrar_detalle('incidencias')
+                self.assertIn('disabled', panel.btn_revisar_incidencias.state())
+                self.assertIn('base_del_lote', panel.aviso_destino_revision.cget('text'))
+                self.assertEqual(panel.btn_usar_base_lote.winfo_manager(), 'pack')
+
+                app.entry_host.set('otro-servidor')
+                self.assertEqual(panel.btn_usar_base_lote.winfo_manager(), '')
+                self.assertIn('disabled', panel.btn_revisar_incidencias.state())
+
+                app.entry_host.set('localhost')
+                panel.btn_usar_base_lote.invoke()
+                self.assertEqual(app.entry_db.get(), 'base_del_lote')
+                self.assertEqual(config['mysql']['database'], 'base_guardada')
+                self.assertNotIn('disabled', panel.btn_revisar_incidencias.state())
+                self.assertEqual(panel.aviso_destino_revision.winfo_manager(), '')
+                self.assertEqual(panel.btn_usar_base_lote.winfo_manager(), '')
+            finally:
+                app.cerrar()
+
     def test_revision_individual_muestra_ejemplares_en_formato_legible(self):
         with tempfile.TemporaryDirectory() as carpeta:
             raiz = tk.Tk()

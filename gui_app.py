@@ -199,6 +199,7 @@ class MigracionApp:
             obtener=self.historial_lotes.obtener, publicar=self._publicar_ui, politica=self._politica_lote,
             iniciar=self._iniciar_desde_panel, exportar=self._exportar_marcxml,
             revisar=self._obtener_registros_revision, framework=self._framework_actual,
+            usar_base=self._usar_base_del_lote,
             proponer=self._proponer_correccion,
             listar_propuestas=self._listar_correcciones_pendientes,
             resolver_propuesta=self._resolver_correccion,
@@ -1041,10 +1042,26 @@ class MigracionApp:
         politica = acciones_lote(lote, ocupado=self.migracion_en_curso, fuente_validada=validado,
                                  destino_coincide=bool(lote and lote.destino == destino), demostracion=demostracion,
                                  lote_activo_id=self._lote_actual_id, detencion_solicitada=self._detencion_solicitada.is_set())
-        politica['revision'] = bool(
-            politica['revision']
-            and tiene_permiso(self.perfil_usuario, 'revision_muestra')
-        )
+        puede_revisar = tiene_permiso(self.perfil_usuario, 'revision_muestra')
+        politica['revision'] = politica['revision'] and puede_revisar
+        politica['aviso_destino_revision'] = ''
+        politica['usar_base_lote'] = False
+        if (lote and lote.correctos and puede_revisar and not demostracion
+                and not self.migracion_en_curso and lote.destino != destino):
+            base = lote.destino.get('database')
+            host = lote.destino.get('host')
+            puerto = lote.destino.get('port')
+            if base and host and puerto:
+                politica['aviso_destino_revision'] = (
+                    f'Para revisar este lote, selecciona la base {base} en {host}:{puerto}.'
+                )
+                if tiene_permiso(self.perfil_usuario, 'validar_mysql'):
+                    politica['usar_base_lote'] = (
+                        host == destino.get('host') and puerto == destino.get('port')
+                        and not getattr(self, '_exportando', False)
+                    )
+            else:
+                politica['aviso_destino_revision'] = 'El historial de este lote no identifica su destino MySQL.'
         politica['nueva_migracion'] = not self.migracion_en_curso and tiene_permiso(
             self.perfil_usuario, 'iniciar_nueva_migracion',
         )
@@ -1965,6 +1982,13 @@ class MigracionApp:
             messagebox.showinfo('Exportación terminada', mensaje)
         else:
             messagebox.showerror('Exportación no completada', mensaje)
+
+    def _usar_base_del_lote(self, lote_id):
+        if not self._requiere_permiso('validar_mysql'):
+            return
+        lote = self.historial_lotes.obtener(lote_id, resumen=True)
+        if self._politica_lote(lote)['usar_base_lote']:
+            self.entry_db.set(lote.destino['database'])
 
     def _obtener_registros_revision(self, lote_id, inicio, cantidad):
         if not self._sesion_valida():
