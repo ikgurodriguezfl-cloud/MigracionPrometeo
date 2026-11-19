@@ -240,14 +240,14 @@ class LotesTests(unittest.TestCase):
         _, etiquetas, resultados, colores = datos_grafico(
             ejemplos, resumen, 'Resultado de fichas',
         )
-        self.assertEqual(etiquetas, ['Correctas', 'Omitidas', 'Con error', 'Pendientes'])
+        self.assertEqual(etiquetas, ['Convertidas', 'Omitidas', 'Rechazadas', 'Pendientes'])
         self.assertEqual(resultados, [224, 21, 10, 145])
         self.assertEqual(len(colores), len(resultados))
 
         titulo, etiquetas, cantidades, colores = datos_grafico(
-            ejemplos, resumen, 'Fichas correctas por lote',
+            ejemplos, resumen, 'Fichas convertidas por lote',
         )
-        self.assertEqual(titulo, 'Fichas correctas por lote')
+        self.assertEqual(titulo, 'Fichas convertidas por lote')
         self.assertEqual(cantidades, [90, 80, 54, 0])
         self.assertEqual(len(etiquetas), len(colores))
         with self.assertRaises(ValueError):
@@ -389,7 +389,7 @@ class LotesTests(unittest.TestCase):
         record.leader = '00000nam a2200000 i 4500'
         record.add_field(Field(tag='001', data='123'))
         record.add_field(Field(tag='005', data='20261104120000.0'))
-        record.add_field(Field(tag='008', data='0' * 40))
+        record.add_field(Field(tag='008', data='261118s2020    mx ' + ' ' * 11 + '000 0 spa d'))
         record.add_field(Field(
             tag='040', indicators=[' ', ' '],
             subfields=[Subfield('a', 'ABC'), Subfield('c', 'ABC')],
@@ -416,7 +416,7 @@ class LotesTests(unittest.TestCase):
         record.leader = '00000nam a2200000 i 4500'
         record.add_field(Field(tag='001', data='123'))
         record.add_field(Field(tag='005', data='20261104120000'))
-        record.add_field(Field(tag='008', data='0' * 40))
+        record.add_field(Field(tag='008', data='261118s2020    mx ' + ' ' * 11 + '000 0 spa d'))
         record.add_field(Field(
             tag='040', indicators=[' ', ' '],
             subfields=[Subfield('a', 'ABC'), Subfield('c', 'ABC')],
@@ -538,7 +538,7 @@ class LotesTests(unittest.TestCase):
         record.leader = '00000nam a2200000 i 4500'
         record.add_field(Field(tag='001', data='123'))
         record.add_field(Field(tag='005', data='20261104120000.0'))
-        record.add_field(Field(tag='008', data='0' * 40))
+        record.add_field(Field(tag='008', data='261118s2020    mx ' + ' ' * 11 + '000 0 spa d'))
         record.add_field(Field(
             tag='040', indicators=[' ', ' '],
             subfields=[Subfield('a', 'ABC'), Subfield('c', 'ABC')],

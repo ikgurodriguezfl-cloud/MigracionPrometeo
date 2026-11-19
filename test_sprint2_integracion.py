@@ -33,6 +33,12 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.app._eventos_ui = Queue()
         self.app._detencion_solicitada = Event()
         self.app.marc_converter = Mock()
+        # El motor recibe un Record real incluso cuando MySQL se sustituye.
+        self.app.marc_converter.ficha_a_record.return_value = MarcConverter().ficha_a_record({
+            'Ficha_No': 1, 'Titulo': 'Libro', 'ISBN': '9780306406157', 'Autor': 'Autor',
+            'DatosFijos': '261118s2020    mx ' + ' ' * 11 + '000 0 spa d',
+            'EtiquetasMARC': '¦260Tepic :Editorial,2020.¦30010 páginas¦650Bibliotecas',
+        }, [])
         self.app.marc_converter.record_a_marcxml.return_value = '<record></record>'
         self.app.marc_converter.record_a_iso2709.return_value = b'marc'
         self.app.log = Mock()
@@ -219,17 +225,20 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.app.entry_user = Mock(); self.app.entry_user.get.return_value = 'prueba'
         self.app.entry_pass = Mock(); self.app.entry_pass.get.return_value = ''
         self.app._actualizar_panel = Mock()
-        cursor = Mock()
-        cursor.fetchall.return_value = [{'marca_marcxml': '<collection><record></record></collection>'}] * 2
-        self.escritor.conn.cursor.return_value.__enter__ = Mock(return_value=cursor)
-        self.escritor.conn.cursor.return_value.__exit__ = Mock(return_value=False)
+        converter = MarcConverter()
+        filas = []
+        for ficha in (1, 3):
+            rec = converter.ficha_a_record({'Ficha_No': ficha, 'Titulo': 'Libro'}, [])
+            filas.append({'id_ficha_acceso': ficha, 'marca_marcxml': converter.record_a_marcxml(rec), 'marca_iso2709': rec.as_marc()})
+        self.escritor.obtener_copias.return_value = filas
+        self.escritor.config = {}
         ruta = str(Path(self.temporal.name) / 'lote.xml')
         with patch('gui_app.MySQLWriter', return_value=self.escritor), patch('gui_app.filedialog.asksaveasfilename', return_value=ruta), patch('gui_app.messagebox.showinfo'), patch('gui_app.messagebox.showerror') as error:
             self.app._exportar_marcxml(self.lote.id)
+            callback, args = self.app._eventos_ui.get(timeout=5)
+            callback(*args)
         error.assert_not_called()
-        consulta, parametros = cursor.execute.call_args.args
-        self.assertIn('WHERE id_ficha_acceso IN (%s,%s)', consulta)
-        self.assertEqual(parametros, (1, 3))
+        self.escritor.obtener_copias.assert_called_once_with([1, 3])
         self.assertEqual(len(ElementTree.parse(ruta).getroot()), 2)
 
     def test_revision_consulta_solo_fichas_correctas_y_exige_permiso(self):
@@ -474,7 +483,7 @@ class InterfazSprint2Tests(unittest.TestCase):
                     and widget.cget('columns') == ('ficha', 'estado')
                 )
                 self.assertEqual(
-                    lista_registros.item('12', 'values'), ('12', 'Convertida'),
+                    lista_registros.item('12', 'values'), ('12', 'Con errores'),
                 )
                 lista_registros.selection_set('13')
                 lista_registros.event_generate('<<TreeviewSelect>>')

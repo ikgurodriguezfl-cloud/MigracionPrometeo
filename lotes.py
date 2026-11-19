@@ -6,6 +6,7 @@ import copy
 import json
 import os
 from pathlib import Path
+from itertools import islice
 import sqlite3
 import tempfile
 from threading import RLock
@@ -170,7 +171,9 @@ def acciones_lote(lote, ocupado=False, fuente_validada=False, destino_coincide=F
         'resumen': bool(lote and lote.estado in ('concluido', 'con_incidencias', 'detenido')),
         'incidencias': bool(lote and (lote.errores or lote.incidencias)),
         'revision': bool(real and not ocupado and destino_coincide and lote.correctos),
-        'exportar': bool(real and not ocupado and destino_coincide and lote.estado == 'concluido' and lote.correctos),
+        'exportar': bool(real and not ocupado and destino_coincide and lote.estado in ('concluido', 'con_incidencias')
+                         and not lote.pendientes and lote.correctos
+                         and not any(i['referencia'] == 'Ejecución' for i in lote.incidencias)),
         'detener': bool(activo and not detencion_solicitada),
         'detencion_solicitada': bool(activo and detencion_solicitada),
     }
@@ -320,6 +323,23 @@ class HistorialLotes:
             lote = next((lote for lote in self._lotes if lote.id == identificador), None)
         if lote is not None:
             return self._resumen(lote) if resumen else self._detalle(copy.deepcopy(lote))
+
+    def pagina_convertidas(self, identificador, inicio, cantidad):
+        """Lee sólo las referencias de la página, también para el historial anterior."""
+        with self._lock:
+            lote = next((l for l in self._lotes if l.id == identificador), None)
+            if not lote:
+                return []
+            if identificador not in self._incrementales:
+                if lote.resultados is None:
+                    return [{'id': ficha, 'motivos': []} for ficha in lote.fichas_correctas[inicio:inicio+cantidad]]
+                return list(islice((f for f in lote.resultados if f['estado'] == 'Convertida'), inicio, inicio+cantidad))
+        with closing(self._conexion_detalle()) as conexion:
+            filas = conexion.execute(
+                "SELECT datos FROM resultados WHERE lote=? AND json_extract(datos, '$.estado')='Convertida' "
+                "ORDER BY posicion LIMIT ? OFFSET ?", (identificador, cantidad, inicio),
+            )
+            return [json.loads(f[0]) for f in filas]
 
     def _persistir(self, lote, *, incremental=False, filas=()):
         lotes = self._lotes.copy()

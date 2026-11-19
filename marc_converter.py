@@ -13,6 +13,7 @@ from pymarc import (
     Field, MARCReader, Record, Subfield, XMLWriter, parse_xml_to_array,
 )
 
+from validacion_marc import isbn_valido, normalizar_posiciones_libro
 from access_reader import formatear_fecha_marc, parsear_etiquetas_marc
 
 
@@ -32,14 +33,18 @@ class MarcConverter:
                  item_type_item: Optional[str] = None,
                  homebranch: Optional[str] = None,
                  holdingbranch: Optional[str] = None,
-                 mapping_path: Optional[str] = None):
+                 mapping_path: Optional[str] = None, edicion_dewey: str = ''):
         self.mapping_path = Path(mapping_path) if mapping_path else self.CONFIGURACION_DEFAULT
         self.mapping = self._cargar_mapeo(self.mapping_path)
         self.mapping_version = self.mapping['version']
+        if edicion_dewey not in ('', '0', '1'):
+            raise ValueError('La edición Dewey configurada debe estar confirmada como completa o abreviada.')
+
         self.settings = deepcopy(self.mapping['settings'])
         valores = {
             'agencia_catalogo': agencia_catalogo,
             'idioma_default': idioma_default,
+            'edicion_dewey': edicion_dewey,
             'item_type_bib': item_type_bib,
             'item_type_item': item_type_item,
             'homebranch': homebranch,
@@ -374,6 +379,13 @@ class MarcConverter:
             if idiomas and idioma not in ('mul', 'und') and idioma != idiomas[0]:
                 self._incidencia(incidencias, '041', 'Ambiguo',
                                  'Los idiomas de DatosFijos y EtiquetasMARC no coinciden; se conservaron para revisión.')
+        leader = self.mapping['record']['leader']
+        if leader[6] in 'at' and leader[7] in 'acdm':
+            cambios = normalizar_posiciones_libro(campos)
+            if cambios:
+                self._incidencia(incidencias, '008', 'Ambiguo',
+                                 'Posiciones incompatibles con libros: ' + ', '.join(cambios)
+                                 + '. Se marcaron sin codificar (|); el original se conserva en 887.')
         return ''.join(campos)
 
     def _idiomas_access(self, contenido):
@@ -482,17 +494,6 @@ class MarcConverter:
                 subfields=subcampos,
             ))
 
-    @staticmethod
-    def _isbn_valido(valor):
-        numero = re.sub(r'[\s-]', '', valor.split('(', 1)[0]).upper()
-        if re.fullmatch(r'\d{9}[\dX]', numero):
-            return sum((10 - i) * (10 if c == 'X' else int(c))
-                       for i, c in enumerate(numero)) % 11 == 0
-        if re.fullmatch(r'97[89]\d{10}', numero):
-            return sum(int(c) * (1 if i % 2 == 0 else 3)
-                       for i, c in enumerate(numero)) % 10 == 0
-        return False
-
     def ficha_a_record(self, ficha: Dict, ejemplares: List[Dict],
                        branch_mapping: Optional[Dict[str, str]] = None,
                        status_mapping: Optional[Dict[str, str]] = None,
@@ -541,9 +542,20 @@ class MarcConverter:
                                  'La etiqueta no tiene correspondencia; su contenido se conserva en 887.')
         if record.get('245') and not any(record.get_fields(tag) for tag in ('100', '110', '111', '130')):
             record['245'].indicator1 = '0'
+        for campo in record.get_fields('082'):
+            if campo.indicator1 == ' ' and self.settings['edicion_dewey']:
+                campo.indicator1 = self.settings['edicion_dewey']
+        for serie in list(record.get_fields('440')):
+            # Un título simple permite conservar tanto la mención como el acceso a la serie.
+            # Las series de estructura ambigua quedan disponibles para el editor.
+            if len(serie.subfields) == 1 and serie.subfields[0].code == 'a':
+                record.remove_field(serie)
+                for tag, indicadores in [('490', ['1', ' ']), ('830', [' ', '0'])]:
+                    record.add_ordered_field(Field(tag=tag, indicators=indicadores,
+                                                   subfields=list(serie.subfields)))
         for campo in record.get_fields('020'):
             for isbn in campo.get_subfields('a'):
-                if not self._isbn_valido(isbn):
+                if not isbn_valido(isbn):
                     self._incidencia(incidencias, '020$a', 'Ambiguo',
                                      f'ISBN con formato o dígito verificador dudoso: {isbn}.')
         return record
@@ -555,6 +567,8 @@ class MarcConverter:
         )
         if registro_normalizado is None:
             raise ValueError('No se pudo normalizar el registro MARC para exportarlo.')
+        if registro_normalizado.as_dict()['fields'] != record.as_dict()['fields']:
+            raise ValueError('El directorio ISO2709 no conserva todos los campos originales.')
         buffer = _NonClosingBytesIO()
         writer = XMLWriter(buffer)
         try:

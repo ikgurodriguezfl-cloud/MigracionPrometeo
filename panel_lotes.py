@@ -1,4 +1,5 @@
 """Panel Tkinter del sprint 2, integrado en el Notebook de MigracionApp."""
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 import csv
@@ -13,9 +14,11 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from xml.sax import SAXException
 from xml.etree import ElementTree
-from pymarc import Field, MARCReader, Record, Subfield, parse_xml_to_array
+from pymarc import Field, JSONReader, MARCReader, Record, Subfield, parse_xml_to_array
 from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
+from validacion_marc import (ERROR as ERROR_MARC, estado_ficha, es_repetible, inspeccionar_copias,
+                             validar_ficha)
 
 from lotes import ESTADOS, ETAPAS, lotes_de_ejemplo
 from ui_kit import (
@@ -157,7 +160,7 @@ def datos_grafico(lotes, resumen, tipo):
     if tipo == 'Resultado de fichas':
         return (
             'Fichas agrupadas por resultado',
-            ['Correctas', 'Omitidas', 'Con error', 'Pendientes'],
+            ['Convertidas', 'Omitidas', 'Rechazadas', 'Pendientes'],
             [
                 sum(lote.correctos for lote in lotes),
                 sum(lote.omitidos for lote in lotes),
@@ -166,10 +169,12 @@ def datos_grafico(lotes, resumen, tipo):
             ],
             [EXITO, INFO, ERROR, '#687287'],
         )
-    if tipo not in ('Fichas correctas por lote', 'Ejemplares por lote'):
+    if tipo == 'Fichas correctas por lote':
+        tipo = 'Fichas convertidas por lote'
+    if tipo not in ('Fichas convertidas por lote', 'Ejemplares por lote'):
         raise ValueError(f'Tipo de gráfico no reconocido: {tipo}')
-    clave = 'correctos' if tipo == 'Fichas correctas por lote' else 'ejemplares'
-    titulo = 'Fichas correctas por lote' if clave == 'correctos' else 'Ejemplares por lote'
+    clave = 'correctos' if tipo == 'Fichas convertidas por lote' else 'ejemplares'
+    titulo = 'Fichas convertidas por lote' if clave == 'correctos' else 'Ejemplares por lote'
     lotes_destacados = sorted(
         lotes,
         key=lambda lote: (
@@ -264,7 +269,7 @@ def campos_desde_iso2709(contenido):
             campos.append({
                 'etiqueta': campo.tag,
                 'indicadores': ''.join(
-                    indicador or '#' for indicador in campo.indicators
+                    indicador.strip() or '#' for indicador in campo.indicators
                 ),
                 'contenido': '  |  '.join(subcampos),
             })
@@ -346,9 +351,19 @@ def record_desde_iso2709(contenido):
 
 
 def record_para_edicion(registro):
+    if registro.get('borrador_marc'):
+        return next(iter(JSONReader(StringIO(registro['borrador_marc'])))), 'Borrador recuperado de la migración. Corrige los campos indicados.'
     errores = []
     try:
-        return record_desde_iso2709(registro.get('marca_iso2709')), ''
+        iso = record_desde_iso2709(registro.get('marca_iso2709'))
+        if registro.get('marca_marcxml'):
+            try:
+                copias = parse_xml_to_array(StringIO(registro['marca_marcxml']), strict=True)
+                if len(copias) == 1 and copias[0].as_dict() != iso.as_dict():
+                    return copias[0], 'Las copias difieren. Estás editando el MARCXML mostrado; comprueba sus campos contra el origen.'
+            except (SAXException, ValueError, TypeError, UnicodeError):
+                pass
+        return iso, ''
     except ValueError as exc:
         errores.append(f'ISO2709: {exc}')
 
@@ -374,25 +389,40 @@ def record_para_edicion(registro):
     )
 
 
+def texto_subcampos(campo):
+    def escapar(valor):
+        return valor.replace('\\', '\\\\').replace('|', '\\|')
+    return ' | '.join(f'${sf.code} {escapar(sf.value)}' for sf in campo.subfields)
+
+
 def parsear_subcampos(texto):
+    partes = []
+    actual = []
+    chars = iter(texto)
+    for char in chars:
+        if char == '\\':
+            siguiente = next(chars, '')
+            if siguiente not in ('|', '\\'):
+                actual.append('\\')
+            actual.append(siguiente)
+        elif char == '|':
+            partes.append(''.join(actual))
+            actual = []
+        else:
+            actual.append(char)
+    partes.append(''.join(actual))
     resultado = []
-    for parte in texto.split('|'):
-        parte = parte.strip()
-        coincidencia = re.fullmatch(r'\$([a-z0-9])\s+(.+)', parte, re.DOTALL)
+    for parte in partes:
+        coincidencia = re.fullmatch(r'\$([a-z0-9])\s+(.+)', parte.strip(), re.DOTALL)
         if not coincidencia:
-            raise ValueError(
-                'Escribe los subcampos como «$a valor | $b valor». '
-                'Cada subcampo requiere código y contenido.'
-            )
-        resultado.append(Subfield(coincidencia.group(1), coincidencia.group(2).strip()))
-    if not resultado:
-        raise ValueError('Agrega por lo menos un subcampo.')
+            raise ValueError('Cada subcampo requiere código y contenido: «$a valor | $b valor».')
+        resultado.append(Subfield(coincidencia[1], coincidencia[2]))
     return resultado
 
 
 def campo_desde_editor(tag, indicadores, contenido):
     tag = tag.strip()
-    if not re.fullmatch(r'\d{3}', tag):
+    if not re.fullmatch(r'[0-9]{3}', tag):
         raise ValueError('La etiqueta MARC debe contener tres dígitos.')
     if tag < '010':
         if not contenido.strip():
@@ -409,10 +439,13 @@ def campo_desde_editor(tag, indicadores, contenido):
     )
 
 
-def serializar_registro(record):
+def serializar_registro(record, perfil=None):
+    errores = [i.texto() for i in validar_ficha(record, perfil) if i.gravedad == ERROR_MARC]
+    if errores:
+        raise ValueError('\n'.join(errores))
     xml = MarcConverter().record_a_marcxml(record)
     iso2709 = record.as_marc()
-    MySQLWriter._validar_registro_propuesto(xml, iso2709)
+    MySQLWriter._validar_registro_propuesto(xml, iso2709, perfil)
     return xml, iso2709
 
 
@@ -420,8 +453,9 @@ class PanelLotes(ttk.Frame):
     def __init__(self, parent, listar, politica, iniciar, exportar, revisar,
                  proponer, listar_propuestas, resolver_propuesta,
                  listar_observaciones, registrar_observacion,
-                 conexiones, detener, reprocesar, obtener, publicar):
+                 conexiones, detener, reprocesar, obtener, publicar, framework=None):
         super().__init__(parent, padding=24, style='Panel.TFrame')
+        self.framework = framework or dict
         self.listar = listar
         self.obtener = obtener
         self.publicar = publicar
@@ -613,7 +647,7 @@ class PanelLotes(ttk.Frame):
             metricas_frame.columnconfigure(indice, weight=1, uniform='metricas')
         for indice, (clave, titulo) in enumerate((
             ('total_lotes', 'LOTES REGISTRADOS'),
-            ('fichas_correctas', 'FICHAS CORRECTAS'),
+            ('fichas_correctas', 'FICHAS CONVERTIDAS'),
             ('ejemplares', 'EJEMPLARES'),
             ('requieren_revision', 'REQUIEREN REVISIÓN'),
         )):
@@ -667,7 +701,7 @@ class PanelLotes(ttk.Frame):
         selector_grafico = ttk.Combobox(
             barra_analisis, textvariable=self.tipo_grafico,
             values=('Estado de los lotes', 'Resultado de fichas',
-                    'Fichas correctas por lote', 'Ejemplares por lote'),
+                    'Fichas convertidas por lote', 'Ejemplares por lote'),
             state='readonly', width=28,
         )
         selector_grafico.pack(side='left')
@@ -898,7 +932,7 @@ class PanelLotes(ttk.Frame):
         self.metricas_lote = {}
         for indice, (campo, etiqueta) in enumerate((
             ('correctos', 'Convertidas'), ('omitidos', 'Ya existentes'),
-            ('errores', 'Con error'), ('pendientes', 'Pendientes'),
+            ('errores', 'Rechazadas'), ('pendientes', 'Pendientes'),
         )):
             tarjeta_m = tarjeta(metricas, padding=(ESPACIO_S, ESPACIO_S))
             tarjeta_m.grid(
@@ -925,12 +959,15 @@ class PanelLotes(ttk.Frame):
         self.btn_iniciar = ttk.Button(acciones, text='Iniciar migración', command=self._iniciar)
         self.btn_detener = ttk.Button(acciones, text='Detener migración', command=self._detener)
         self.btn_reprocesar = ttk.Button(acciones, text='Reprocesar pendientes', command=self._reprocesar)
-        self.btn_exportar = ttk.Button(acciones, text='Exportar MARCXML', command=self._exportar)
+        self.btn_exportar = ttk.Button(acciones, text='Exportar MARC21', command=self._exportar)
+        self.btn_revisar_detalle = ttk.Button(acciones, text='Revisar fichas', command=self._revisar)
+        self.btn_revisar_incidencias = ttk.Button(self.detalle_incidencias, text='Revisar fichas del lote', command=self._revisar)
+        self.btn_revisar_incidencias.grid(row=2, column=0, sticky='w', pady=ESPACIO_XS)
         self.btn_incidencias = ttk.Button(acciones, text='Ver incidencias', command=self._incidencias)
         self.btn_resumen = ttk.Button(acciones, text='Guardar reporte', command=self._resumen)
         for indice, boton in enumerate((
             self.btn_iniciar, self.btn_detener, self.btn_reprocesar, self.btn_exportar,
-            self.btn_incidencias,
+            self.btn_incidencias, self.btn_revisar_detalle,
         )):
             boton.grid(
                 row=indice // 2, column=indice % 2, sticky='ew',
@@ -1039,7 +1076,7 @@ class PanelLotes(ttk.Frame):
         return (
             f'{activos} migraciones activas · {pendientes:,} fichas pendientes · '
             f'{errores:,} fichas con error · {incidencias:,} incidencias registradas · '
-            f'{tasa} de fichas correctas sobre las procesadas.'
+            f'{tasa} de fichas convertidas sobre las procesadas.'
         )
 
     def _pintar_recientes(self):
@@ -1268,10 +1305,17 @@ class PanelLotes(ttk.Frame):
                 'en_espera': 'Valida las conexiones y ejecuta este lote.',
                 'en_proceso': 'Migración en curso. El avance se actualiza automáticamente.',
                 'concluido': 'Listo para revisar o exportar. No se ha importado a Koha.',
-                'con_incidencias': 'Revisa las incidencias antes de continuar.',
+                'con_incidencias': 'Abre Revisar fichas para ver la validación actual. Las advertencias permiten exportar.',
                 'detenido': 'Avance conservado. Este lote no se reanuda automáticamente.',
             }
             siguiente = pasos[lote.estado]
+            if lote.procesados and not lote.correctos:
+                if lote.errores:
+                    siguiente = 'Consulta los rechazos de la migración y reprocesa el lote una vez resuelta la causa.'
+                elif lote.omitidos:
+                    siguiente = 'Las fichas procesadas ya existían. Abre el lote que las convirtió para revisarlas.'
+            elif lote.correctos and not self.politica(lote, self.demo.get())['revision']:
+                siguiente += ' Para editar, usa el destino del lote y un perfil de Revisión, Aprobación o Administración.'
             if lote.lote_origen:
                 siguiente = f'Reprocesamiento de {lote.lote_origen}. {siguiente}'
             self.siguiente.config(text=siguiente)
@@ -1282,7 +1326,7 @@ class PanelLotes(ttk.Frame):
             )
             texto_incidencias = (
                 f'{lote.errores:,} fichas con error · '
-                f'{len(lote.incidencias):,} incidencias registradas\n\n'
+                f'{len(lote.incidencias):,} incidencias recientes al migrar. Abre Revisar fichas para consultar su estado actual.\n\n'
                 f'{detalle_incidencias}'
             )
             self._actualizar_texto_lote('incidencias', texto_incidencias)
@@ -1305,6 +1349,7 @@ class PanelLotes(ttk.Frame):
             ('reprocesar', self.btn_reprocesar),
             ('exportar', self.btn_exportar), ('revision', self.btn_revisar),
             ('incidencias', self.btn_incidencias), ('resumen', self.btn_resumen),
+            ('revision', self.btn_revisar_detalle), ('revision', self.btn_revisar_incidencias),
         ):
             boton.configure(
                 state='normal' if politica[accion] else 'disabled',
@@ -1345,6 +1390,7 @@ class PanelLotes(ttk.Frame):
         # La paginación evita consultar todo el lote de una vez.
         tamano_pagina = 50
         try:
+            perfil = self.framework()
             registros = self.revisar(lote.id, 0, tamano_pagina)
         except Exception as exc:
             messagebox.showerror(
@@ -1379,7 +1425,7 @@ class PanelLotes(ttk.Frame):
         ttk.Label(
             cabecera_revision,
             text=f'{lote.id} · {os.path.basename(lote.fuente)}  —  '
-                 'Selecciona una ficha; puedes recorrerlas con las flechas.',
+                 'Selecciona una ficha para revisar sus campos.',
             style='Panel.TLabel',
         ).grid(row=1, column=1, sticky='w', pady=(0, 4))
 
@@ -1420,9 +1466,17 @@ class PanelLotes(ttk.Frame):
                 return
             ancho = area.winfo_width()
             if ancho > 1:
-                area.sashpos(0, max(360, int(ancho * 0.35)))
+                area.sashpos(0, min(330, max(180, int(ancho * 0.23))))
 
-        ventana.after(250, ajustar_divisor)
+        ajuste_pendiente = ventana.after_idle(ajustar_divisor)
+        busqueda_pendiente = None
+
+        def cancelar_temporizadores(evento):
+            if evento.widget is ventana:
+                for pendiente in (ajuste_pendiente, busqueda_pendiente):
+                    if pendiente is not None:
+                        ventana.after_cancel(pendiente)
+        ventana.bind('<Destroy>', cancelar_temporizadores, add='+')
 
         encabezado_lista = ttk.Frame(listado, style='Tarjeta.TFrame')
         encabezado_lista.grid(row=0, column=0, sticky='ew', pady=(0, 8))
@@ -1467,7 +1521,7 @@ class PanelLotes(ttk.Frame):
         )
         lbl_registro.grid(row=0, column=1, sticky='w')
         acciones_revision = ttk.Frame(encabezado_registro, style='Tarjeta.TFrame')
-        acciones_revision.grid(row=0, column=2, sticky='e')
+        acciones_revision.grid(row=1, column=0, columnspan=3, sticky='w', pady=(5, 0))
         lbl_aviso_registro = ttk.Label(
             detalle, text='', style='Tarjeta.TLabel', wraplength=680,
         )
@@ -1478,6 +1532,15 @@ class PanelLotes(ttk.Frame):
         marco_ejemplares = ttk.Frame(vistas_detalle, padding=8)
         marco_xml = ttk.Frame(vistas_detalle, padding=8)
         vistas_detalle.add(marco_campos, text='▤  Campos MARC21')
+        tab_issues = ttk.Frame(vistas_detalle, padding=8)
+        tab_issues.columnconfigure(0, weight=1)
+        tab_issues.rowconfigure(0, weight=1)
+        texto_issues = tk.Text(tab_issues, wrap='word', font=(FUENTE, TAM_CUERPO), padx=8, pady=8)
+        texto_issues.grid(row=0, column=0, sticky='nsew')
+        scroll_issues = ttk.Scrollbar(tab_issues, command=texto_issues.yview)
+        scroll_issues.grid(row=0, column=1, sticky='ns')
+        texto_issues.configure(yscrollcommand=scroll_issues.set, state='disabled')
+        vistas_detalle.add(tab_issues, text='Incidencias de la ficha')
         vistas_detalle.add(marco_ejemplares, text='▦  Ejemplares')
         vistas_detalle.add(marco_xml, text='<>  MARCXML')
         for marco in (marco_campos, marco_ejemplares, marco_xml):
@@ -1570,7 +1633,8 @@ class PanelLotes(ttk.Frame):
 
         def boton_con_icono(parent, nombre_icono, texto, comando, estado='normal'):
             grupo = ttk.Frame(parent, style='Tarjeta.TFrame')
-            grupo.pack(side='left', padx=(0, ESPACIO_S))
+            posicion = len(parent.winfo_children()) - 1
+            grupo.grid(row=posicion // 2, column=posicion % 2, sticky='w', padx=(0, ESPACIO_S), pady=2)
             icono = crear_icono(
                 grupo, nombre_icono, color=PRIMARIO, size=16, fondo=SUPERFICIE,
             )
@@ -1639,10 +1703,19 @@ class PanelLotes(ttk.Frame):
                     lote, self.demo.get(),
                 ).get('registrar_observacion') else 'disabled',
             )
+            issues = registro['incidencias_actuales']
+            texto_issues.configure(state='normal')
+            texto_issues.delete('1.0', 'end')
+            texto_issues.insert('1.0', '\n\n'.join(i.texto() for i in issues) or 'Ficha válida para exportación.')
+            originales = registro.get('motivos_migracion', [])
+            if originales:
+                texto_issues.insert('end', '\n\nObservaciones guardadas al migrar\n' + '\n'.join(originales))
+            texto_issues.configure(state='disabled')
+            vistas_detalle.tab(tab_issues, text=f'Incidencias ({len(issues)})')
             lbl_registro.config(
                 text=f'Ficha {registro["id_ficha_acceso"]} · '
                      f'MARC 001: {registro.get("id_control") or "Sin valor"} · '
-                     f'{registro.get("estado") or "Sin estado"}',
+                     f'{estado_ficha(issues)}',
             )
             tabla_campos.delete(*tabla_campos.get_children())
             tabla_ejemplares.delete(*tabla_ejemplares.get_children())
@@ -1687,7 +1760,9 @@ class PanelLotes(ttk.Frame):
                         text=f'No se pudieron consultar ejemplares: {exc}',
                         foreground='#a36d23',
                     )
-            if recuperados_marc:
+            if registro.get('estado') == 'VALIDADO' and not recuperados_marc and ejemplares:
+                lbl_estado_ejemplares.config(text='Ejemplares del origen. Los campos 952 en la pestaña MARC21 muestran la versión aprobada para exportar.')
+            elif recuperados_marc:
                 lbl_estado_ejemplares.config(
                     text='No hay filas guardadas en la tabla de ejemplares. '
                          'Se muestran los datos disponibles del campo MARC 952; '
@@ -1836,7 +1911,7 @@ class PanelLotes(ttk.Frame):
             try:
                 # La reparación desde ISO2709 queda pendiente de aprobación.
                 record = record_desde_iso2709(registro.get('marca_iso2709'))
-                marcxml, iso2709 = serializar_registro(record)
+                marcxml, iso2709 = serializar_registro(record, perfil)
                 propuesta_id = self.proponer(
                     lote.id, registro['id_ficha_acceso'], marcxml, iso2709,
                     registro['huella_revision'],
@@ -1876,10 +1951,10 @@ class PanelLotes(ttk.Frame):
             )
             editor.columnconfigure(0, weight=1)
             editor.rowconfigure(2, weight=1)
+            aviso_editor = tk.StringVar()
             ttk.Label(
                 editor,
-                text='Agrega o corrige campos MARC. El cambio no se guarda en MySQL '
-                     'hasta que Aprobación lo autorice.',
+                textvariable=aviso_editor,
                 style='Panel.TLabel', wraplength=850,
             ).grid(row=0, column=0, sticky='w', padx=14, pady=(12, 8))
             leader_var = tk.StringVar(value=record.leader)
@@ -1894,12 +1969,12 @@ class PanelLotes(ttk.Frame):
             marco_campos.rowconfigure(0, weight=1)
             tabla_edicion = ttk.Treeview(
                 marco_campos,
-                columns=('tag', 'indicadores', 'contenido'),
+                columns=('tag', 'indicadores', 'contenido', 'revision'),
                 show='headings', style='Lotes.Treeview',
             )
             for columna, titulo, ancho in (
                 ('tag', 'Campo', 85), ('indicadores', 'Indicadores', 95),
-                ('contenido', 'Contenido / subcampos', 820),
+                ('contenido', 'Contenido / subcampos', 460), ('revision', 'Revisión', 140),
             ):
                 tabla_edicion.heading(columna, text=titulo)
                 tabla_edicion.column(
@@ -1954,23 +2029,36 @@ class PanelLotes(ttk.Frame):
 
             campos_editables = list(record.fields)
 
+            def registro_editado():
+                propuesta = Record(force_utf8=True)
+                propuesta.leader = leader_var.get()
+                propuesta.fields = list(campos_editables)
+                return propuesta
+
             def presentar_campos(seleccionar=None):
                 tabla_edicion.delete(*tabla_edicion.get_children())
+                problemas = validar_ficha(registro_editado(), perfil)
+                ocurrencias = {}
                 for indice, campo in enumerate(campos_editables):
                     if campo.is_control_field():
                         indicadores, contenido = '', campo.data or ''
                     else:
                         indicadores = ''.join(
-                            indicador or '#' for indicador in campo.indicators
+                            indicador.strip() or '#' for indicador in campo.indicators
                         )
-                        contenido = ' | '.join(
-                            f'${subcampo.code} {subcampo.value}'
-                            for subcampo in campo.subfields
-                        )
+                        contenido = texto_subcampos(campo)
+                    ocurrencias[campo.tag] = ocurrencias.get(campo.tag, 0) + 1
+                    del_campo = [i for i in problemas if i.campo == campo.tag
+                                 and i.ocurrencia in (0, ocurrencias[campo.tag])]
                     tabla_edicion.insert(
                         '', 'end', iid=str(indice),
-                        values=(campo.tag, indicadores, contenido),
+                        values=(campo.tag, indicadores, contenido, estado_ficha(del_campo)),
                     )
+                primero = next((i for i in problemas if i.gravedad == ERROR_MARC), None)
+                aviso_editor.set(f'{estado_ficha(problemas)} · {len(problemas)} incidencias'
+                                 + (f' · {primero.texto()}' if primero else ''))
+                if seleccionar is None:
+                    boton_duplicar.configure(state='disabled')
                 if seleccionar is not None and 0 <= seleccionar < len(campos_editables):
                     tabla_edicion.selection_set(str(seleccionar))
 
@@ -1980,12 +2068,14 @@ class PanelLotes(ttk.Frame):
                 contenido_editor.delete('1.0', tk.END)
                 tabla_edicion.selection_remove(*tabla_edicion.selection())
                 formulario_estado.config(text='')
+                boton_duplicar.configure(state='disabled')
 
             def seleccionar_campo(_evento=None):
                 seleccion = tabla_edicion.selection()
                 if not seleccion:
                     return
                 campo = campos_editables[int(seleccion[0])]
+                boton_duplicar.configure(state='normal' if es_repetible(campo.tag, perfil) else 'disabled')
                 tag_var.set(campo.tag)
                 if campo.is_control_field():
                     indicadores_var.set('')
@@ -1993,23 +2083,26 @@ class PanelLotes(ttk.Frame):
                     contenido_editor.insert('1.0', campo.data or '')
                 else:
                     indicadores_var.set(''.join(
-                        indicador or '#' for indicador in campo.indicators
+                        indicador.strip() or '#' for indicador in campo.indicators
                     ))
-                    contenido = ' | '.join(
-                        f'${subcampo.code} {subcampo.value}'
-                        for subcampo in campo.subfields
-                    )
+                    contenido = texto_subcampos(campo)
                     contenido_editor.delete('1.0', tk.END)
                     contenido_editor.insert('1.0', contenido)
-                formulario_estado.config(
-                    text='Edita los valores y pulsa «Actualizar campo».',
-                )
+                num = sum(f.tag == campo.tag for f in campos_editables[:int(seleccion[0])+1])
+                actuales = [i for i in validar_ficha(registro_editado(), perfil)
+                            if i.campo == campo.tag and i.ocurrencia in (0, num)]
+                formulario_estado.configure(text=actuales[0].texto() if actuales else '')
 
-            def campo_validado():
-                return campo_desde_editor(
+            def campo_validado(indice=None):
+                campo = campo_desde_editor(
                     tag_var.get(), indicadores_var.get(),
                     contenido_editor.get('1.0', 'end-1c'),
                 )
+
+                if not es_repetible(campo.tag, perfil) and any(
+                        f.tag == campo.tag for pos, f in enumerate(campos_editables) if pos != indice):
+                    raise ValueError(f'{campo.tag} no es repetible.')
+                return campo
 
             def agregar_campo():
                 try:
@@ -2029,13 +2122,23 @@ class PanelLotes(ttk.Frame):
                     )
                     return
                 try:
-                    campo = campo_validado()
+                    campo = campo_validado(int(seleccion[0]))
                 except ValueError as exc:
                     messagebox.showerror('Campo no válido', str(exc), parent=editor)
                     return
                 indice = int(seleccion[0])
                 campos_editables[indice] = campo
                 presentar_campos(indice)
+
+            def duplicar_campo():
+                seleccion = tabla_edicion.selection()
+                if not seleccion:
+                    return
+                indice = int(seleccion[0])
+                campo = campos_editables[indice]
+                if es_repetible(campo.tag, perfil):
+                    campos_editables.insert(indice + 1, deepcopy(campo))
+                    presentar_campos(indice + 1)
 
             def eliminar_campo():
                 seleccion = tabla_edicion.selection()
@@ -2062,17 +2165,30 @@ class PanelLotes(ttk.Frame):
             ttk.Button(
                 acciones_campo, text='Eliminar campo', command=eliminar_campo,
             ).pack(side='left')
+            boton_duplicar = ttk.Button(acciones_campo, text='Duplicar campo', command=duplicar_campo, state='disabled')
+            boton_duplicar.pack(side='left', padx=6)
             formulario_estado = ttk.Label(
                 acciones_campo, style='Panel.TLabel',
             )
-            formulario_estado.pack(side='left', padx=10)
+            formulario_estado.pack(side='left', padx=8)
+            formulario_estado.configure(wraplength=280)
 
             def enviar_propuesta():
-                propuesta = Record(force_utf8=True)
-                propuesta.leader = leader_var.get()
-                propuesta.fields = list(campos_editables)
+                seleccion = tabla_edicion.selection()
+                if seleccion:
+                    activo = campos_editables[int(seleccion[0])]
+                    try:
+                        pendiente = campo_desde_editor(tag_var.get(), indicadores_var.get(), contenido_editor.get('1.0', 'end-1c'))
+                        if pendiente != activo and str(pendiente) != str(activo):
+                            raise ValueError('Pulsa Actualizar campo antes de enviar los cambios.')
+                    except ValueError as exc:
+                        messagebox.showwarning('Campo pendiente', str(exc), parent=editor)
+                        return
+                elif tag_var.get().strip() or contenido_editor.get('1.0', 'end-1c').strip():
+                    messagebox.showwarning('Campo pendiente', 'Pulsa Agregar campo antes de enviar.', parent=editor)
+                    return
                 try:
-                    marcxml, iso2709 = serializar_registro(propuesta)
+                    marcxml, iso2709 = serializar_registro(registro_editado(), perfil)
                     propuesta_id = self.proponer(
                         lote.id, registro['id_ficha_acceso'], marcxml, iso2709,
                         registro['huella_revision'],
@@ -2093,6 +2209,14 @@ class PanelLotes(ttk.Frame):
 
             barra_editor = ttk.Frame(editor, padding=(12, 6, 12, 12))
             barra_editor.grid(row=5, column=0, sticky='ew')
+            def validar_edicion():
+                try:
+                    issues = validar_ficha(registro_editado(), perfil)
+                    mensaje = '\n'.join(i.texto() for i in issues) or 'La ficha está lista para exportar.'
+                    messagebox.showinfo(estado_ficha(issues), mensaje, parent=editor)
+                except ValueError as exc:
+                    messagebox.showerror('Leader no válido', str(exc), parent=editor)
+            ttk.Button(barra_editor, text='Validar ficha', command=validar_edicion).pack(side='left')
             ttk.Button(
                 barra_editor, text='Volver a revisión',
                 command=lambda: cerrar_pagina_auxiliar('editor', pagina_editor),
@@ -2101,7 +2225,15 @@ class PanelLotes(ttk.Frame):
                 barra_editor, text='Enviar a aprobación',
                 style='Primary.TButton', command=enviar_propuesta,
             ).pack(side='right', padx=(0, 8))
-            presentar_campos()
+            pendiente = next((i for i in registro['incidencias_actuales'] if i.gravedad == ERROR_MARC
+                              and i.campo.isdecimal()), None)
+            indice = next((p for p, campo in enumerate(campos_editables)
+                           if pendiente and campo.tag == pendiente.campo
+                           and sum(f.tag == campo.tag for f in campos_editables[:p+1]) == (pendiente.ocurrencia or 1)), None)
+            presentar_campos(indice)
+            if pendiente and indice is None:
+                tag_var.set(pendiente.campo)
+                formulario_estado.configure(text=pendiente.detalle)
 
         def revisar_propuestas():
             if not self.politica(lote, self.demo.get()).get('aprobar_correccion'):
@@ -2261,7 +2393,8 @@ class PanelLotes(ttk.Frame):
                     return
                 cerrar_pagina_auxiliar('propuestas', pagina_propuestas)
                 self.actualizar(seleccionar=lote.id)
-                cargar_pagina(inicio_pagina)
+                self._mostrar_pagina_historial('revision')
+                cargar_pagina(inicio_pagina, seleccionar=next(p['id_ficha_acceso'] for p in propuestas if p['id'] == propuesta_id))
 
             propuesta_tabla.bind('<<TreeviewSelect>>', pintar_propuesta)
             botonera = ttk.Frame(revision, padding=12)
@@ -2283,11 +2416,11 @@ class PanelLotes(ttk.Frame):
             propuesta_tabla.selection_set(str(propuestas[0]['id']))
             pintar_propuesta()
 
-        def cargar_pagina(inicio):
+        def cargar_pagina(inicio, inicial=None, seleccionar=None):
             nonlocal inicio_pagina, registros_actuales
             try:
                 registros_actuales = (
-                    registros if inicio == 0
+                    inicial if inicial is not None
                     else self.revisar(lote.id, inicio, tamano_pagina)
                 )
                 if not registros_actuales:
@@ -2302,16 +2435,22 @@ class PanelLotes(ttk.Frame):
             lista_registros.delete(*lista_registros.get_children())
             for registro in registros_actuales:
                 ficha = str(registro['id_ficha_acceso'])
+                _, issues = inspeccionar_copias(registro.get('marca_marcxml'), registro.get('marca_iso2709'),
+                                                perfil, registro.get('duplicado'))
+                if registro.get('borrador_marc'):
+                    borrador, _ = record_para_edicion(registro)
+                    issues.extend(validar_ficha(borrador, perfil))
+                registro['incidencias_actuales'] = issues
                 lista_registros.insert(
                     '', 'end', iid=ficha,
                     values=(
-                        ficha, registro.get('estado') or '',
+                        ficha, estado_ficha(issues),
                     ),
                 )
             fin = inicio_pagina + len(registros_actuales)
             estado_pagina.config(
                 text=f'Registros {inicio_pagina + 1:,}–{fin:,} de '
-                     f'{lote.correctos:,} correctos',
+                     f'{lote.correctos:,} convertidos',
             )
             boton_anterior.configure(
                 state='normal' if inicio_pagina > 0 else 'disabled',
@@ -2319,9 +2458,48 @@ class PanelLotes(ttk.Frame):
             boton_siguiente.configure(
                 state='normal' if fin < lote.correctos else 'disabled',
             )
-            lista_registros.selection_set(str(registros_actuales[0]['id_ficha_acceso']))
+            clave = str(seleccionar)
+            if not lista_registros.exists(clave):
+                clave = str(registros_actuales[0]['id_ficha_acceso'])
+            lista_registros.selection_set(clave)
+            lista_registros.see(clave)
             mostrar_registro()
+            return True
 
+        def buscar_incidencia(direccion):
+            actual = registro_seleccionado[0]
+            if not actual:
+                return
+            pos = next(i for i, fila in enumerate(registros_actuales) if fila is actual)
+            nonlocal busqueda_pendiente
+            if busqueda_pendiente is not None:
+                ventana.after_cancel(busqueda_pendiente)
+            def buscar(indice):
+                nonlocal busqueda_pendiente
+                busqueda_pendiente = None
+                if not ventana.winfo_exists() or self._historial_pagina_actual != 'revision':
+                    return
+                while 0 <= indice < len(registros_actuales):
+                    fila = registros_actuales[indice]
+                    if fila['incidencias_actuales']:
+                        clave = str(fila['id_ficha_acceso'])
+                        lista_registros.selection_set(clave)
+                        lista_registros.see(clave)
+                        mostrar_registro()
+                        vistas_detalle.select(tab_issues)
+                        return
+                    indice += direccion
+                pagina = inicio_pagina + direccion * tamano_pagina
+                if 0 <= pagina < lote.correctos and cargar_pagina(pagina):
+                    busqueda_pendiente = ventana.after(1, buscar, 0 if direccion > 0 else len(registros_actuales) - 1)
+                else:
+                    messagebox.showinfo('Revisión de incidencias', 'Llegaste al final de la búsqueda.', parent=ventana)
+            buscar(pos + direccion)
+
+        saltos = ttk.Frame(listado, style='Tarjeta.TFrame')
+        saltos.grid(row=2, column=0, columnspan=2, sticky='ew')
+        for indice, (etiqueta, sentido) in enumerate((('← Incidencia', -1), ('Incidencia →', 1))):
+            ttk.Button(saltos, text=etiqueta, command=lambda d=sentido: buscar_incidencia(d)).grid(row=0, column=indice, sticky='ew')
         lista_registros.bind('<<TreeviewSelect>>', mostrar_registro)
         boton_anterior = ttk.Button(
             navegacion_pagina, text='← Anterior',
@@ -2356,7 +2534,7 @@ class PanelLotes(ttk.Frame):
         self.aviso.grid_remove()
         self._navegacion_panel.grid_remove()
         self._mostrar_pagina_historial('revision')
-        cargar_pagina(0)
+        cargar_pagina(0, inicial=registros)
         ventana.after_idle(lista_registros.focus_set)
 
     def _detener(self):
