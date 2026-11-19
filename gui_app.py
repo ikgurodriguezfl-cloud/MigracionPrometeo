@@ -15,6 +15,7 @@ from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
 from lotes import ETAPAS, HistorialLotes, acciones_lote, ahora
 from panel_lotes import PanelLotes
+from koha_results_view import VistaResultadosKoha
 from permissions import (
     requerir_permiso, AccesoDenegado, tiene_permiso,
 )
@@ -187,6 +188,23 @@ class MigracionApp:
         self.frame_migracion = ttk.Frame(self.page_container, style='App.TFrame')
         self.frame_log = ttk.Frame(self.page_container, style='App.TFrame')
         self.frame_usuarios = ttk.Frame(self.page_container, style='App.TFrame')
+        self.frame_koha = VistaResultadosKoha(
+            self.page_container,
+            get_mysql_config=lambda: {
+                **self._destino_actual(),
+                'user': self.entry_user.get(),
+                'password': self.entry_pass.get(),
+                'charset': 'utf8mb4',
+            },
+            get_usuario=self._usuario_actual,
+            get_lote_activo=lambda: self._lote_actual_id,
+            get_lote_obj=self.historial_lotes.obtener,
+            get_lista_lotes=lambda: self.historial_lotes.listar(resumen=True),
+            on_registrar_evento=lambda lid, ev: (
+                self.historial_lotes.actualizar(lid, evento=ev),
+                self._actualizar_panel(),
+            ),
+        )
 
         self.panel_lotes = PanelLotes(
             self.page_container, listar=lambda: self.historial_lotes.listar(resumen=True),
@@ -207,6 +225,7 @@ class MigracionApp:
             self.frame_conexion,
             self.frame_config,
             self.frame_migracion,
+            self.frame_koha,
             self.frame_log,
             self.frame_usuarios,
         )
@@ -223,6 +242,7 @@ class MigracionApp:
         self._crear_boton_navegacion(self.nav_container, 'Actividad', self.frame_log)
         if tiene_permiso(self.perfil_usuario, 'gestionar_usuarios'):
             self._crear_boton_navegacion(self.nav_container, 'Usuarios', self.frame_usuarios)
+        self._crear_boton_navegacion(self.nav_container, 'Resultados Koha', self.frame_koha, icono='check')
 
         self._crear_pestana_conexion()
         self._crear_pestana_migracion()
@@ -426,15 +446,18 @@ class MigracionApp:
                 'Tu perfil no tiene permiso para abrir esta sección.',
             )
             return
+        if pantalla is self.frame_koha:
+            self.frame_koha.sincronizar_lote_activo()
         self.pagina_actual = pantalla
         pantalla.tkraise()
         self._actualizar_navegacion_secuencial()
 
     def _pagina_autorizada(self, pantalla):
-        if pantalla is self.panel_lotes:
-            return self.perfil_usuario in (
-                'Ejecucion', 'Revision', 'Aprobacion', 'Administracion',
-            )
+        if pantalla in (self.panel_lotes, self.frame_koha):
+         return self.perfil_usuario in (
+           'Ejecucion', 'Revision', 'Aprobacion', 'Administracion',
+                  )
+        
         permiso_por_pagina = {
             self.frame_conexion: 'validar_access',
             self.frame_config: 'editar_configuracion',
@@ -486,6 +509,7 @@ class MigracionApp:
             ),
             self.frame_log: self._pagina_autorizada(self.frame_log),
             self.frame_usuarios: self._pagina_autorizada(self.frame_usuarios),
+            self.frame_koha: self._pagina_autorizada(self.frame_koha),
         }
         if not disponible.get(actual, False):
             actual = self.panel_lotes

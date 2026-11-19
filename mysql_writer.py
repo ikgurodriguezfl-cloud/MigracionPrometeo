@@ -148,6 +148,34 @@ class MySQLWriter:
                     INDEX idx_lote_ficha_fecha (lote_id, id_ficha_acceso, fecha)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """)
+            # --- 1. AGREGAR DENTRO DE crear_tablas(self) EN mysql_writer.py ---
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS importaciones_koha (
+                    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    lote_id VARCHAR(40) NOT NULL,
+                    fecha_importacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    usuario VARCHAR(100) NOT NULL,
+                    total_enviados INT UNSIGNED NOT NULL,
+                    total_aceptados INT UNSIGNED NOT NULL,
+                    total_rechazados INT UNSIGNED NOT NULL,
+                    estado_conciliacion ENUM('CONCILIADO','DISCREPANCIA') NOT NULL,
+                    UNIQUE KEY uk_lote_importacion (lote_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS detalle_importacion_koha (
+                    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    lote_id VARCHAR(40) NOT NULL,
+                    id_ficha_acceso INT UNSIGNED NOT NULL,
+                    id_control VARCHAR(50),
+                    biblionumber_koha INT UNSIGNED NULL,
+                    resultado ENUM('ACEPTADO','RECHAZADO') NOT NULL,
+                    causa_rechazo TEXT NULL,
+                    fecha_proceso TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_lote_res (lote_id, resultado),
+                    INDEX idx_ficha_koha (id_ficha_acceso)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
         self.conn.commit()
 
     def insertar_log(self, nivel: str, mensaje: str,
@@ -583,8 +611,158 @@ class MySQLWriter:
                         propuesta['id_ficha_acceso'],
                     ),
                 )
+
+        
             self.conn.commit()
             return estado_final
         except Exception:
             self.conn.rollback()
             raise
+
+        # --- 2. AGREGAR AL FINAL DE LA CLASE MySQLWriter EN mysql_writer.py ---
+
+    def registrar_resultado_importacion_koha(
+        self, lote_id: str, usuario: str, resultados_registros: list,
+        conteo_koha_aceptados: int, conteo_koha_rechazados: int,
+        fichas_enviadas_lote: Optional[list] = None,
+    ) -> dict:
+        """
+        Concilia los resultados reales de Koha contra los registros aprobados en MySQL
+        y el historial del lote.
+        """
+        if not resultados_registros:
+            raise ValueError("El archivo de respuesta de Koha no contiene registros para conciliar.")
+
+        # Si conocemos las fichas aprobadas del lote, total_enviados es el total real enviado
+        total_enviados = (
+            len(fichas_enviadas_lote)
+            if fichas_enviadas_lote is not None and len(fichas_enviadas_lote) > 0
+            else len(resultados_registros)
+        )
+        aceptados_lista = sum(1 for r in resultados_registros if r['resultado'] == 'ACEPTADO')
+        rechazados_lista = sum(1 for r in resultados_registros if r['resultado'] == 'RECHAZADO')
+
+        # Verificar que cada ficha reportada por Koha exista en registros_marc
+        ids_koha = [r['id_ficha_acceso'] for r in resultados_registros]
+        marcadores = ','.join(['%s'] * len(ids_koha))
+        with self.conn.cursor() as cur:
+            cur.execute(
+                f"SELECT id_ficha_acceso FROM registros_marc WHERE id_ficha_acceso IN ({marcadores})",
+                tuple(ids_koha),
+            )
+            existentes_mysql = {row['id_ficha_acceso'] for row in cur.fetchall()}
+
+        huerfanos = [fid for fid in ids_koha if fid not in existentes_mysql]
+        if huerfanos:
+            muestra = ', '.join(str(x) for x in huerfanos[:5])
+            raise ValueError(
+                f"La respuesta de Koha contiene {len(huerfanos)} registro(s) que no existen "
+                f"en MySQL (ej. fichas: {muestra}). Verifica que corresponda a este lote."
+            )
+
+        conciliado = (
+            total_enviados == (conteo_koha_aceptados + conteo_koha_rechazados)
+            and len(resultados_registros) == total_enviados
+            and aceptados_lista == conteo_koha_aceptados
+            and rechazados_lista == conteo_koha_rechazados
+        )
+        estado_conciliacion = 'CONCILIADO' if conciliado else 'DISCREPANCIA'
+
+        self.conn.begin()
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO importaciones_koha
+                    (lote_id, usuario, total_enviados, total_aceptados, total_rechazados, estado_conciliacion)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        usuario = VALUES(usuario),
+                        total_enviados = VALUES(total_enviados),
+                        total_aceptados = VALUES(total_aceptados),
+                        total_rechazados = VALUES(total_rechazados),
+                        estado_conciliacion = VALUES(estado_conciliacion),
+                        fecha_importacion = CURRENT_TIMESTAMP
+                    """,
+                    (lote_id, usuario, total_enviados, conteo_koha_aceptados,
+                     conteo_koha_rechazados, estado_conciliacion)
+                )
+                cur.execute("DELETE FROM detalle_importacion_koha WHERE lote_id = %s", (lote_id,))
+
+                for reg in resultados_registros:
+                    cur.execute(
+                        """
+                        INSERT INTO detalle_importacion_koha
+                        (lote_id, id_ficha_acceso, id_control, biblionumber_koha, resultado, causa_rechazo)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            lote_id,
+                            reg['id_ficha_acceso'],
+                            reg.get('id_control', ''),
+                            reg.get('biblionumber_koha'),
+                            reg['resultado'],
+                            reg.get('causa_rechazo'),
+                        )
+                    )
+                    # Actualizar estado en registros_marc si fue rechazado para trazabilidad
+                    if reg['resultado'] == 'RECHAZADO':
+                        cur.execute(
+                            "UPDATE registros_marc SET estado = 'ERROR' WHERE id_ficha_acceso = %s",
+                            (reg['id_ficha_acceso'],)
+                        )
+
+                cur.execute(
+                    "INSERT INTO log_migracion (nivel, mensaje) VALUES (%s, %s)",
+                    (
+                        'INFO' if conciliado else 'WARN',
+                        f"Importación Koha lote {lote_id}: enviados={total_enviados}, "
+                        f"aceptados={conteo_koha_aceptados}, rechazados={conteo_koha_rechazados} ({estado_conciliacion})."
+                    )
+                )
+            self.conn.commit()
+            return {
+                'lote_id': lote_id,
+                'enviados': total_enviados,
+                'aceptados': conteo_koha_aceptados,
+                'rechazados': conteo_koha_rechazados,
+                'estado_conciliacion': estado_conciliacion,
+            }
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def obtener_resumen_koha(self, lote_id: str) -> Optional[dict]:
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT * FROM importaciones_koha WHERE lote_id = %s", (lote_id,))
+            return cur.fetchone()
+
+    def listar_detalle_koha(self, lote_id: str, filtro_estado: str = 'TODOS', busqueda: str = '') -> list:
+        sql = """
+            SELECT d.id_ficha_acceso, d.id_control, d.biblionumber_koha,
+                   d.resultado, d.causa_rechazo, r.estado AS estado_marc
+            FROM detalle_importacion_koha d
+            LEFT JOIN registros_marc r ON r.id_ficha_acceso = d.id_ficha_acceso
+            WHERE d.lote_id = %s
+        """
+        params = [lote_id]
+        if filtro_estado in ('ACEPTADO', 'RECHAZADO'):
+            sql += " AND d.resultado = %s"
+            params.append(filtro_estado)
+        if busqueda.strip():
+            sql += " AND (CAST(d.id_ficha_acceso AS CHAR) LIKE %s OR d.id_control LIKE %s OR d.causa_rechazo LIKE %s)"
+            patron = f"%{busqueda.strip()}%"
+            params.extend([patron, patron, patron])
+        sql += " ORDER BY d.resultado DESC, d.id_ficha_acceso ASC"
+
+        with self.conn.cursor() as cur:
+            cur.execute(sql, tuple(params))
+            return cur.fetchall()
+        
+    def listar_lotes_koha(self) -> list:
+        """Devuelve los IDs de lote registrados en importaciones_koha ordenados del más reciente al más antiguo."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT lote_id FROM importaciones_koha ORDER BY fecha_importacion DESC, id DESC"
+            )
+            return [row['lote_id'] for row in cur.fetchall()]
