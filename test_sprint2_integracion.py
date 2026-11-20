@@ -663,6 +663,9 @@ class InterfazSprint2Tests(unittest.TestCase):
             raiz.update_idletasks()
             self.assertIsNotNone(login.entry_usuario)
             self.assertIsNotNone(login.entry_contrasena)
+            self.assertEqual((login.logo_tecnologico.width(), login.logo_tecnologico.height()), (257, 110))
+            self.assertEqual((login.logo_tepic.width(), login.logo_tepic.height()), (110, 110))
+            self.assertTrue(login.logo_tepic.transparency_get(0, 0))
         finally:
             raiz.destroy()
 

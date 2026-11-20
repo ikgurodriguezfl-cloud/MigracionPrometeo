@@ -1,4 +1,5 @@
 """Acceso principal de NexoMARC."""
+import os
 import tkinter as tk
 from tkinter import ttk
 from auth import AuthenticationService
@@ -25,9 +26,9 @@ class LoginScreen:
 
         self.root.title('NexoMARC | Iniciar sesión')
         ancho = min(960, self.root.winfo_screenwidth() - 48)
-        alto = min(640, self.root.winfo_screenheight() - 72)
+        alto = min(680, self.root.winfo_screenheight() - 72)
         self.root.geometry(f'{ancho}x{alto}')
-        self.root.minsize(min(800, ancho), min(580, alto))
+        self.root.minsize(min(800, ancho), min(620, alto))
         self.root.resizable(True, True)
         self.root.configure(background=LOGIN_FONDO)
 
@@ -117,12 +118,44 @@ class LoginScreen:
         acceso = tk.Frame(contenedor, bg=SUPERFICIE, padx=30, pady=24)
         acceso.grid(row=0, column=1, sticky='nsew')
         acceso.grid_columnconfigure(0, weight=1)
-        acceso.grid_rowconfigure(0, weight=1)
+        acceso.grid_rowconfigure(1, weight=1)
+
+        logos = tk.Frame(acceso, bg=SUPERFICIE)
+        logos.grid(row=0, column=0, sticky='ew', pady=(ESPACIO_M, ESPACIO_XL))
+        fila_logos = tk.Frame(logos, bg=SUPERFICIE)
+        fila_logos.pack(anchor='center')
+        carpeta_logos = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'assets',
+        )
+        self.logo_tecnologico = tk.PhotoImage(
+            master=self.root,
+            file=os.path.join(carpeta_logos, 'logo_tecnologico.png'),
+        ).subsample(7, 7)
+        self.logo_tepic = tk.PhotoImage(
+            master=self.root,
+            file=os.path.join(carpeta_logos, 'logo_tepic.png'),
+        ).subsample(7, 7)
+        tk.Label(
+            fila_logos, image=self.logo_tecnologico, bg=SUPERFICIE,
+            borderwidth=0,
+        ).pack(side='left')
+        tk.Frame(fila_logos, bg=BORDE, width=1, height=48).pack(
+            side='left', padx=ESPACIO_L,
+        )
+        tk.Label(
+            fila_logos, image=self.logo_tepic, bg=SUPERFICIE,
+            borderwidth=0,
+        ).pack(side='left')
+
+        area_formulario = ttk.Frame(acceso, style='LoginSurface.TFrame')
+        area_formulario.grid(row=1, column=0, sticky='nsew')
 
         formulario = ttk.Frame(
             acceso, style='LoginCard.TFrame', padding=(ESPACIO_XL, ESPACIO_XL),
         )
-        formulario.place(relx=0.5, rely=0.5, anchor='center')
+        formulario.place(
+            in_=area_formulario, relx=0.5, rely=0.5, anchor='center',
+        )
         formulario.columnconfigure(0, weight=1)
 
         encabezado = ttk.Frame(formulario, style='LoginCard.TFrame')
@@ -149,7 +182,7 @@ class LoginScreen:
         self._mostrar_login()
 
         pie = ttk.Frame(acceso, style='LoginSurface.TFrame')
-        pie.grid(row=1, column=0, sticky='ew', pady=(ESPACIO_M, 0))
+        pie.grid(row=2, column=0, sticky='ew', pady=(ESPACIO_M, 0))
         ttk.Label(
             pie, text='Migración Access  ·  MARC21  ·  Koha',
             style='LoginHint.TLabel',

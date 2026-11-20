@@ -528,6 +528,11 @@ class PanelLotes(ttk.Frame):
         estilo.configure('Tarjeta.TFrame', background=SUPERFICIE)
         estilo.configure('Panel.TLabel', background=FONDO, foreground=TEXTO_SECUNDARIO,
                          font=(FUENTE, TAM_CAMPO_ETIQUETA))
+        estilo.configure(
+            'DemoNotice.TLabel', background=ADVERTENCIA_SUAVE,
+            foreground=ADVERTENCIA, padding=(ESPACIO_M, ESPACIO_S),
+            font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'),
+        )
         estilo.configure('Titulo.Panel.TLabel', background=FONDO, foreground=TEXTO,
                          font=(FUENTE, TAM_TITULO_PAGINA, 'bold'))
         estilo.configure('Tarjeta.TLabel', background=SUPERFICIE, foreground=TEXTO_SECUNDARIO,
@@ -622,9 +627,10 @@ class PanelLotes(ttk.Frame):
 
         self.aviso = ttk.Label(
             self, text='Selecciona un lote para ver su estado y las acciones disponibles.',
-            style='Panel.TLabel',
+            style='DemoNotice.TLabel',
         )
         self.aviso.grid(row=1, column=0, sticky='ew', pady=(0, ESPACIO_M))
+        self.aviso.grid_remove()
 
         # ---------- Navegación de contenido ----------
         self._vistas_contenido = {}
@@ -1081,7 +1087,13 @@ class PanelLotes(ttk.Frame):
 
     def actualizar(self, seleccionar=None):
         self.lotes = lotes_de_ejemplo() if self.demo.get() else self.listar()
-        self.aviso.config(text='DEMOSTRACIÓN: datos de ejemplo. No se ejecutan ni exportan migraciones reales.' if self.demo.get() else 'Historial de la aplicación. El avance se actualiza durante la migración.')
+        if self.demo.get():
+            self.aviso.config(
+                text='MODO DEMOSTRACIÓN · Datos de ejemplo; no se ejecutan ni exportan migraciones reales.',
+            )
+            self.aviso.grid()
+        else:
+            self.aviso.grid_remove()
         resumen = resumir_lotes(self.lotes)
         for clave, etiqueta in self.metricas.items():
             etiqueta.config(text=f'{resumen[clave]:,}')
@@ -1488,7 +1500,10 @@ class PanelLotes(ttk.Frame):
             ventana.destroy()
             self._mostrar_pagina_historial('detalle')
             self._cabecera_panel.grid()
-            self.aviso.grid()
+            if self.demo.get():
+                self.aviso.grid()
+            else:
+                self.aviso.grid_remove()
             self._navegacion_panel.grid()
             if maximizada_por_revision:
                 raiz.state('normal')

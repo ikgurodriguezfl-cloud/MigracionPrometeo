@@ -171,6 +171,12 @@ class MigracionApp:
         ttk.Label(
             cuenta, text=self.usuario_nombre, style='HeroUser.TLabel',
         ).pack(side='left', padx=(0, ESPACIO_S))
+        tk.Frame(cuenta, bg=NOCHE_BORDE, width=1, height=22).pack(
+            side='left', padx=(0, ESPACIO_S),
+        )
+        ttk.Label(
+            cuenta, text='ROL', style='HeroMeta.TLabel',
+        ).pack(side='left', padx=(0, ESPACIO_XS))
         ttk.Label(
             cuenta, text=self.perfil_usuario, style='HeroRole.TLabel',
         ).pack(side='left', padx=(0, ESPACIO_M))
@@ -338,8 +344,10 @@ class MigracionApp:
                          font=(FUENTE, 12, 'bold'))
         estilo.configure('HeroUser.TLabel', background=NOCHE, foreground=TEXTO_INVERSO,
                          font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'))
-        estilo.configure('HeroRole.TLabel', background=PRIMARIO_SUAVE, foreground=PRIMARIO,
-                         padding=(8, 4), font=(FUENTE, 8, 'bold'))
+        estilo.configure('HeroMeta.TLabel', background=NOCHE, foreground='#a8b0c2',
+                         font=(FUENTE, 8, 'bold'))
+        estilo.configure('HeroRole.TLabel', background=NOCHE, foreground='#e8dce2',
+                         font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'))
         estilo.configure('HeroQuiet.TButton', background=NOCHE_ALT,
                          foreground=TEXTO_INVERSO, borderwidth=0, padding=(8, 6))
         estilo.map('HeroQuiet.TButton',
@@ -508,7 +516,7 @@ class MigracionApp:
         for pantalla, boton in self._nav_items.items():
             seleccionada = pantalla == actual
             habilitado = disponible.get(pantalla, False)
-            fondo = NOCHE
+            fondo = BARRA_LATERAL_ACTIVA if seleccionada else NOCHE
             color = (
                 TEXTO_INVERSO if seleccionada else
                 '#d2d7e2' if habilitado else '#687287'
