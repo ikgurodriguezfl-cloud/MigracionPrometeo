@@ -3,15 +3,15 @@ from hashlib import sha256
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime
-from io import BytesIO, StringIO
+from validacion_marc import ERROR, inspeccionar_copias
 import pymysql
-from pymarc import MARCReader, parse_xml_to_array
 from typing import Dict, Optional
 
 
 class MySQLWriter:
     def __init__(self, config: Dict):
         self.config = config
+        self.framework = {}
         self._conn = None
         self._en_transaccion_ficha = False
 
@@ -116,6 +116,13 @@ class MySQLWriter:
                     id_ficha INT UNSIGNED,
                     id_ejemplar VARCHAR(100)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS borradores_revision_marc (
+                    id_registro INT UNSIGNED PRIMARY KEY,
+                    campos_json LONGTEXT NOT NULL,
+                    FOREIGN KEY (id_registro) REFERENCES registros_marc(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
             # La tabla conserva propuesta y decisión sin sobrescribir el original.
             cur.execute("""
@@ -222,6 +229,15 @@ class MySQLWriter:
             if not self._en_transaccion_ficha:
                 self.conn.commit()
             return cur.lastrowid
+
+    def insertar_borrador(self, id_ficha, campos_json):
+        # La transacción exterior conserva juntos el borrador, la ficha y sus ejemplares.
+        id_registro = self.insertar_registro_marc(id_ficha, str(id_ficha), '', None)
+        with self.conn.cursor() as cur:
+            cur.execute('INSERT INTO borradores_revision_marc (id_registro, campos_json) VALUES (%s,%s)',
+                        (id_registro, campos_json))
+            cur.execute("UPDATE registros_marc SET estado='ERROR' WHERE id=%s", (id_registro,))
+        return id_registro
 
     def insertar_ejemplar(self, id_registro_marc: int, id_ficha: int,
                           ejemplar: Dict, branch_koha: Optional[str],
@@ -377,25 +393,29 @@ class MySQLWriter:
             'por_estado': por_estado,
         }
 
-    def obtener_registros_revision(self, fichas):
+    def obtener_copias(self, fichas):
         if not fichas:
             return []
-        if len(fichas) > 100:
-            raise ValueError('La consulta de revisión no puede superar 100 fichas.')
-        if any(type(ficha) is not int or ficha < 0 for ficha in fichas):
+        if len(fichas) > 100 or any(type(f) is not int or f < 0 for f in fichas):
             raise ValueError('La lista de fichas para revisión no es válida.')
-
         marcadores = ','.join(['%s'] * len(fichas))
         with self.conn.cursor() as cur:
             cur.execute(
-                'SELECT id_ficha_acceso, id_control, marca_marcxml, '
-                'marca_iso2709, estado, '
-                'fecha_creacion, fecha_actualizacion FROM registros_marc '
-                f'WHERE id_ficha_acceso IN ({marcadores}) '
-                'ORDER BY id_ficha_acceso',
+                'SELECT r.id_ficha_acceso, r.id_control, r.marca_marcxml, r.marca_iso2709, '
+                'r.estado, r.fecha_creacion, r.fecha_actualizacion, '
+                'EXISTS(SELECT 1 FROM registros_marc d WHERE d.id_control = r.id_control '
+                'AND d.id <> r.id) AS duplicado FROM registros_marc r '
+                f'WHERE r.id_ficha_acceso IN ({marcadores}) ORDER BY r.id_ficha_acceso',
                 tuple(fichas),
             )
-            registros = cur.fetchall()
+            return cur.fetchall()
+
+    def obtener_registros_revision(self, fichas):
+        if not fichas:
+            return []
+        registros = self.obtener_copias(fichas)
+        marcadores = ','.join(['%s'] * len(fichas))
+        with self.conn.cursor() as cur:
             # Evita mostrar una revisión parcial si faltan fichas en MySQL.
             if len(registros) != len(set(fichas)):
                 raise ValueError(
@@ -413,6 +433,13 @@ class MySQLWriter:
                     tuple(fichas),
                 )
             ejemplares = cur.fetchall()
+            for registro in registros:
+                if registro.get('estado') == 'ERROR' and not registro.get('marca_marcxml') and not registro.get('marca_iso2709'):
+                    cur.execute('SELECT b.campos_json FROM borradores_revision_marc b JOIN registros_marc r '
+                                'ON r.id=b.id_registro WHERE r.id_ficha_acceso=%s', (registro['id_ficha_acceso'],))
+                    borrador = cur.fetchone()
+                    if borrador:
+                        registro['borrador_marc'] = borrador['campos_json']
 
         por_ficha = {ficha: [] for ficha in fichas}
         for ejemplar in ejemplares:
@@ -431,55 +458,16 @@ class MySQLWriter:
         return sha256(xml_bytes + b'\0' + iso_bytes).hexdigest()
 
     @staticmethod
-    def _validar_registro_propuesto(marcxml, iso2709):
-        if not isinstance(marcxml, str) or not marcxml.strip():
-            raise ValueError('El MARCXML propuesto está vacío.')
-        if not isinstance(iso2709, bytes) or not iso2709:
-            raise ValueError('El MARC ISO2709 propuesto está vacío.')
-        try:
-            desde_xml = parse_xml_to_array(StringIO(marcxml), strict=True)
-            registros_iso = list(MARCReader(BytesIO(iso2709), to_unicode=True))
-        except Exception as exc:
-            raise ValueError(f'El registro MARC propuesto está corrupto: {exc}') from exc
-        if (len(desde_xml) != 1 or len(registros_iso) != 1
-                or registros_iso[0] is None):
-            raise ValueError('La propuesta debe contener exactamente un registro MARC válido.')
-        record_xml = desde_xml[0]
-        desde_iso = registros_iso[0]
-        if record_xml.as_dict() != desde_iso.as_dict():
-            raise ValueError('Las versiones MARCXML e ISO2709 no representan el mismo registro.')
-
-        errores = []
-        if len(str(record_xml.leader)) != 24:
-            errores.append('LDR debe tener exactamente 24 caracteres')
-        campo_001 = record_xml.get_fields('001')
-        if not campo_001 or not (campo_001[0].data or '').strip():
-            errores.append('falta el campo 001')
-        campo_005 = record_xml.get_fields('005')
-        if not campo_005 or len((campo_005[0].data or '').strip()) != 16:
-            errores.append('005 debe tener el formato MARC YYYYMMDDHHMMSS.0 (16 caracteres)')
-        campo_008 = record_xml.get_fields('008')
-        if not campo_008 or len(campo_008[0].data or '') != 40:
-            errores.append('008 debe tener exactamente 40 caracteres')
-        campo_040 = record_xml.get_fields('040')
-        if not campo_040 or any(
-            not (campo_040[0].get_subfields(codigo) or [''])[0].strip()
-            for codigo in ('a', 'c')
-        ):
-            errores.append('040 debe incluir los subcampos $a y $c')
-        campo_245 = record_xml.get_fields('245')
-        if not campo_245 or not any(
-            valor.strip()
-            for campo in campo_245 for valor in campo.get_subfields('a')
-        ):
-            errores.append('falta el título principal 245$a')
+    def _validar_registro_propuesto(marcxml, iso2709, framework=None):
+        record, incidencias = inspeccionar_copias(marcxml, iso2709, framework)
+        errores = [i.texto() for i in incidencias if i.gravedad == ERROR]
         if errores:
-            raise ValueError('El registro está incompleto: ' + '; '.join(errores) + '.')
-        return record_xml
+            raise ValueError('\n'.join(errores))
+        return record
 
     def proponer_correccion(self, lote_id, id_ficha, marcxml, iso2709,
                             huella_original, usuario):
-        self._validar_registro_propuesto(marcxml, iso2709)
+        self._validar_registro_propuesto(marcxml, iso2709, self.framework)
         self.conn.begin()
         try:
             with self.conn.cursor() as cur:
@@ -571,7 +559,7 @@ class MySQLWriter:
                     # Antes de aplicar, se valida el formato y que el original siga intacto.
                     registro_propuesto = self._validar_registro_propuesto(
                         propuesta['marca_marcxml_propuesta'],
-                        bytes(propuesta['marca_iso2709_propuesta']),
+                        bytes(propuesta['marca_iso2709_propuesta']), self.framework,
                     )
                     cur.execute(
                         'SELECT marca_marcxml, marca_iso2709 FROM registros_marc '

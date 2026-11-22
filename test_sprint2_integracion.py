@@ -17,6 +17,7 @@ from lotes import HistorialLotes
 from marc_converter import MarcConverter
 from io import StringIO
 from pymarc import parse_xml_to_array
+from pymysql.err import OperationalError
 import main as entrada
 
 
@@ -33,6 +34,12 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.app._eventos_ui = Queue()
         self.app._detencion_solicitada = Event()
         self.app.marc_converter = Mock()
+        # El motor recibe un Record real incluso cuando MySQL se sustituye.
+        self.app.marc_converter.ficha_a_record.return_value = MarcConverter().ficha_a_record({
+            'Ficha_No': 1, 'Titulo': 'Libro', 'ISBN': '9780306406157', 'Autor': 'Autor',
+            'DatosFijos': '261118s2020    mx ' + ' ' * 11 + '000 0 spa d',
+            'EtiquetasMARC': '¦260Tepic :Editorial,2020.¦30010 páginas¦650Bibliotecas',
+        }, [])
         self.app.marc_converter.record_a_marcxml.return_value = '<record></record>'
         self.app.marc_converter.record_a_iso2709.return_value = b'marc'
         self.app.log = Mock()
@@ -219,17 +226,20 @@ class IntegracionSprint2Tests(unittest.TestCase):
         self.app.entry_user = Mock(); self.app.entry_user.get.return_value = 'prueba'
         self.app.entry_pass = Mock(); self.app.entry_pass.get.return_value = ''
         self.app._actualizar_panel = Mock()
-        cursor = Mock()
-        cursor.fetchall.return_value = [{'marca_marcxml': '<collection><record></record></collection>'}] * 2
-        self.escritor.conn.cursor.return_value.__enter__ = Mock(return_value=cursor)
-        self.escritor.conn.cursor.return_value.__exit__ = Mock(return_value=False)
+        converter = MarcConverter()
+        filas = []
+        for ficha in (1, 3):
+            rec = converter.ficha_a_record({'Ficha_No': ficha, 'Titulo': 'Libro'}, [])
+            filas.append({'id_ficha_acceso': ficha, 'marca_marcxml': converter.record_a_marcxml(rec), 'marca_iso2709': rec.as_marc()})
+        self.escritor.obtener_copias.return_value = filas
+        self.escritor.config = {}
         ruta = str(Path(self.temporal.name) / 'lote.xml')
         with patch('gui_app.MySQLWriter', return_value=self.escritor), patch('gui_app.filedialog.asksaveasfilename', return_value=ruta), patch('gui_app.messagebox.showinfo'), patch('gui_app.messagebox.showerror') as error:
             self.app._exportar_marcxml(self.lote.id)
+            callback, args = self.app._eventos_ui.get(timeout=5)
+            callback(*args)
         error.assert_not_called()
-        consulta, parametros = cursor.execute.call_args.args
-        self.assertIn('WHERE id_ficha_acceso IN (%s,%s)', consulta)
-        self.assertEqual(parametros, (1, 3))
+        self.escritor.obtener_copias.assert_called_once_with([1, 3])
         self.assertEqual(len(ElementTree.parse(ruta).getroot()), 2)
 
     def test_revision_consulta_solo_fichas_correctas_y_exige_permiso(self):
@@ -380,6 +390,79 @@ class IntegracionSprint2Tests(unittest.TestCase):
 
 
 class InterfazSprint2Tests(unittest.TestCase):
+    def test_aprobacion_puede_revisar_lote_en_otra_base_del_mismo_servidor(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            historial = HistorialLotes(Path(carpeta) / 'lotes.json')
+            lote = historial.recibir('copia.mdb', 1)
+            historial.actualizar(
+                lote.id, estado='concluido', etapa='finalizado', correctos=1,
+                fichas_correctas=[11],
+                destino={'host': 'localhost', 'port': 3306, 'database': 'base_del_lote'},
+            )
+            auth = Mock()
+            auth.get_profile.return_value = 'Aprobacion'
+            auth.get_username.return_value = 'aprobadora'
+            raiz = tk.Tk()
+            raiz.withdraw()
+            config = {'mysql': {'host': 'localhost', 'port': 3306, 'database': 'base_guardada'}}
+            with patch.object(MigracionApp, 'cargar_config', return_value=config):
+                app = MigracionApp(raiz, historial, auth_service=auth, session_token='sesion')
+            try:
+                panel = app.panel_lotes
+                panel.seleccionar_real(lote.id)
+                panel._mostrar_detalle('incidencias')
+                self.assertNotIn('disabled', panel.btn_revisar_incidencias.state())
+                self.assertIn('base_del_lote', panel.aviso_destino_revision.cget('text'))
+
+                app.entry_host.set('otro-servidor')
+                self.assertIn('disabled', panel.btn_revisar_incidencias.state())
+                app.entry_host.set('localhost')
+
+                modelo = MarcConverter()
+                record = modelo.ficha_a_record({'Ficha_No': 11, 'Titulo': 'Inventario'}, [])
+                escritor = Mock()
+                escritor.obtener_registros_revision.return_value = [{
+                    'id_ficha_acceso': 11, 'marca_marcxml': modelo.record_a_marcxml(record),
+                    'marca_iso2709': record.as_marc(), 'ejemplares': [],
+                }]
+                def crear_writer(config_mysql):
+                    escritor.config = config_mysql
+                    return escritor
+
+                with patch('gui_app.MySQLWriter', side_effect=crear_writer), \
+                        patch('gui_app.simpledialog.askstring') as pedir_clave, \
+                        patch('panel_lotes.messagebox.showerror') as error:
+                    escritor.connect.side_effect = OperationalError(1045, 'Acceso denegado')
+                    pedir_clave.return_value = None
+                    panel.btn_revisar_incidencias.invoke()
+                    self.assertEqual(app.entry_db.get(), 'base_guardada')
+                    self.assertEqual(panel._historial_pagina_actual, 'detalle')
+                    escritor.obtener_registros_revision.assert_not_called()
+                    error.assert_not_called()
+
+                    escritor.connect.side_effect = [OperationalError(1045, 'Acceso denegado'), None]
+                    pedir_clave.return_value = 'clave-temporal'
+                    panel.btn_revisar_incidencias.invoke()
+                    raiz.update_idletasks()
+                    self.assertEqual(panel._historial_pagina_actual, 'revision')
+                    self.assertEqual(escritor.config['database'], 'base_del_lote')
+                    self.assertEqual(escritor.config['password'], 'clave-temporal')
+                    self.assertEqual(pedir_clave.call_args.kwargs['show'], '*')
+                    escritor.obtener_registros_revision.assert_called_once_with([11])
+                    error.assert_not_called()
+
+                    pedir_clave.reset_mock()
+                    escritor.connect.side_effect = None
+                    app._obtener_registros_revision(lote.id, 0, 1)
+                    pedir_clave.assert_not_called()
+
+                self.assertEqual(app.entry_db.get(), 'base_del_lote')
+                self.assertEqual(app.entry_pass.get(), 'clave-temporal')
+                self.assertEqual(config['mysql']['database'], 'base_guardada')
+                self.assertNotIn('password', config['mysql'])
+            finally:
+                app.cerrar()
+
     def test_revision_individual_muestra_ejemplares_en_formato_legible(self):
         with tempfile.TemporaryDirectory() as carpeta:
             raiz = tk.Tk()
@@ -427,12 +510,27 @@ class InterfazSprint2Tests(unittest.TestCase):
                 ventana_principal.geometry.return_value = '1280x720+0+0'
                 panel.winfo_toplevel = Mock(return_value=ventana_principal)
                 panel.listar_observaciones = Mock(return_value=[])
+                def campo_xml(tag, valor):
+                    return (
+                        f'<datafield tag="{tag}" ind1=" " ind2=" ">'
+                        f'<subfield code="a">{valor}</subfield></datafield>'
+                    )
+
+                original = registro['marca_marcxml'].removesuffix('</record>')
+                materia = campo_xml('650', 'Materia existente')
+                actual = (original + campo_xml('020', '968-409-007-2')
+                          + materia + campo_xml('500', 'Nota eliminada') + '</record>')
+                propuesta = (
+                    original.replace('00000nam', '00144nam').replace('2200000', '2200061')
+                    + campo_xml('020', '9684090072')
+                    + campo_xml('650', 'Materia nueva') + materia + '</record>'
+                )
                 panel.listar_propuestas = Mock(return_value=[{
                     'id': 5, 'id_ficha_acceso': 12, 'propuesto_por': 'revisora',
                     'fecha_creacion': '2026-01-03',
-                    'marca_marcxml_actual': registro['marca_marcxml'],
+                    'marca_marcxml_actual': actual,
                     'marca_iso2709_actual': None,
-                    'marca_marcxml_propuesta': registro['marca_marcxml'],
+                    'marca_marcxml_propuesta': propuesta,
                     'marca_iso2709_propuesta': None,
                 }])
                 panel._revisar()
@@ -474,7 +572,7 @@ class InterfazSprint2Tests(unittest.TestCase):
                     and widget.cget('columns') == ('ficha', 'estado')
                 )
                 self.assertEqual(
-                    lista_registros.item('12', 'values'), ('12', 'Convertida'),
+                    lista_registros.item('12', 'values'), ('12', 'Con errores'),
                 )
                 lista_registros.selection_set('13')
                 lista_registros.event_generate('<<TreeviewSelect>>')
@@ -523,6 +621,28 @@ class InterfazSprint2Tests(unittest.TestCase):
 
                 invocar_boton('Revisar propuestas')
                 validar_vista_interna('propuestas')
+                tablas_comparacion = [
+                    widget for widget in recorrer(raiz)
+                    if isinstance(widget, ttk.Treeview) and
+                    widget.cget('columns') == ('tag', 'ind', 'cambio', 'contenido')
+                ]
+                def filas(tabla):
+                    return [
+                        (tabla.item(fila, 'values')[0], tabla.item(fila, 'values')[2],
+                         tabla.item(fila, 'tags'))
+                        for fila in tabla.get_children()
+                    ]
+
+                self.assertEqual(filas(tablas_comparacion[0]), [
+                    ('LDR', '', ''), ('001', '', ''), ('245', '', ''),
+                    ('020', 'Modificado', ('Modificado',)), ('650', '', ''),
+                    ('500', 'Eliminado', ('Eliminado',)),
+                ])
+                self.assertEqual(filas(tablas_comparacion[1]), [
+                    ('LDR', '', ''), ('001', '', ''), ('245', '', ''),
+                    ('020', 'Modificado', ('Modificado',)),
+                    ('650', 'Agregado', ('Agregado',)), ('650', '', ''),
+                ])
                 invocar_boton('Volver a revisión')
                 validar_vista_interna('revision')
                 invocar_boton('← Volver al lote')
@@ -543,6 +663,9 @@ class InterfazSprint2Tests(unittest.TestCase):
             raiz.update_idletasks()
             self.assertIsNotNone(login.entry_usuario)
             self.assertIsNotNone(login.entry_contrasena)
+            self.assertEqual((login.logo_tecnologico.width(), login.logo_tecnologico.height()), (257, 110))
+            self.assertEqual((login.logo_tepic.width(), login.logo_tepic.height()), (110, 110))
+            self.assertTrue(login.logo_tepic.transparency_get(0, 0))
         finally:
             raiz.destroy()
 

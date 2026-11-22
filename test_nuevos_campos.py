@@ -1,27 +1,29 @@
+"""Prueba opcional de lectura del respaldo real y sus ejemplares."""
+import os
+import unittest
+
 from access_reader import AccessReader
 from marc_converter import MarcConverter
+from validacion_marc import inspeccionar_copias
 
-mdb = r"C:\Users\ikerg\Downloads\Prometeo V-20260918T200642Z-1-001\Prometeo V\PROMETEO.mdb"
-r = AccessReader(mdb)
 
-# Probar con una ficha que tenga ejemplares (ficha 4 tiene 3)
-fichas = r.leer_fichas(limite=5)
+class ConversionAccessTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get('PROMETEO_ACCESS_PRUEBA'), 'Requiere una copia local de Access')
+    def test_fichas_y_ejemplares_del_respaldo(self):
+        reader = AccessReader(os.environ['PROMETEO_ACCESS_PRUEBA'])
+        self.addCleanup(reader.close)
+        fichas = reader.leer_fichas(limite=5)
+        self.assertTrue(fichas)
+        converter = MarcConverter()
+        for ficha in fichas:
+            numero = ficha['Ficha_No']
+            ejemplares = reader.leer_ejemplares_por_ficha([numero]).get(numero, [])
+            record = converter.ficha_a_record(ficha, ejemplares)
+            copia, incidencias = inspeccionar_copias(converter.record_a_marcxml(record), record.as_marc())
+            self.assertFalse(any(i.campo in ('ISO2709', 'MARCXML', 'MARCXML/ISO2709') for i in incidencias))
+            self.assertEqual(copia['001'].data, str(numero))
+            self.assertEqual(len(copia.get_fields('952')), len(ejemplares))
 
-converter = MarcConverter(
-    item_type_bib='LIBR0',
-    item_type_item='LIBR0',
-    homebranch='ITT',
-    holdingbranch='ITT',
-)
 
-for ficha in fichas[:3]:
-    id_ficha = ficha['Ficha_No']
-    ejemplares = r.leer_ejemplares_por_ficha([id_ficha]).get(id_ficha, [])
-    record = converter.ficha_a_record(ficha, ejemplares)
-    marcxml = converter.record_a_marcxml(record)
-    print(f"=== Ficha {id_ficha}: {ficha['Titulo'][:40]} ===")
-    print(marcxml[:1500])
-    print("\n" + "="*60 + "\n")
-
-r.close()
-print("Prueba completada.")
+if __name__ == '__main__':
+    unittest.main()
