@@ -34,7 +34,7 @@ class MarcMappingTests(unittest.TestCase):
 
         record = self.converter.ficha_a_record(ficha, ejemplares)
 
-        self.assertEqual(self.converter.mapping_version, '2.2')
+        self.assertEqual(self.converter.mapping_version, '2.3')
         self.assertEqual(record.leader, '00000cam a2200000 a 4500')
         self.assertEqual(record['001'].data, '21')
         self.assertEqual(record['005'].data, '20210708091011.0')

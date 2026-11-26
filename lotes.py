@@ -71,6 +71,7 @@ class Lote:
     usuario: Optional[str] = None
     omitir_existentes: bool = True
     iniciado_en: Optional[str] = None
+    bloqueos_marc: Optional[int] = None  # Fichas convertidas con errores MARC en el momento de migrar.
 
     @property
     def procesados(self):
@@ -93,6 +94,9 @@ class Lote:
                 raise ValueError(f'{campo}: el conteo debe ser un entero no negativo.')
         if not self.procesados <= self.total_objetivo <= self.total_recibidos:
             raise ValueError('Los conteos del lote son inconsistentes.')
+        if self.bloqueos_marc is not None and (
+                type(self.bloqueos_marc) is not int or not 0 <= self.bloqueos_marc <= self.correctos):
+            raise ValueError('Los bloqueos MARC deben corresponder a fichas convertidas.')
         if detalle and (not isinstance(self.fichas_correctas, list)
                 or any(type(ficha) is not int or ficha < 0 for ficha in self.fichas_correctas)
                 or len(set(self.fichas_correctas)) != len(self.fichas_correctas)
@@ -100,7 +104,7 @@ class Lote:
             raise ValueError('El listado de fichas correctas no coincide con su conteo.')
         if self.estado == 'en_espera' and (self.procesados or self.etapa != 'recepcion'):
             raise ValueError('Un lote en espera no puede tener procesamiento iniciado.')
-        if self.estado == 'concluido' and (self.pendientes or self.errores or self.incidencias or not self.total_objetivo or self.etapa != 'finalizado'):
+        if self.estado == 'concluido' and (self.pendientes or self.errores or self.bloqueos_marc or self.incidencias or not self.total_objetivo or self.etapa != 'finalizado'):
             raise ValueError('El lote no puede concluir con pendientes, errores o sin registros.')
         if self.estado == 'con_incidencias' and not (self.errores or self.incidencias):
             raise ValueError('Falta describir la incidencia del lote.')
@@ -156,6 +160,12 @@ class Lote:
         self.actividad.append({'fecha': self.actualizado_en, 'mensaje': mensaje})
         self.actividad = self.actividad[-100:]
 
+    def datos_historial(self):
+        # Las versiones anteriores construyen Lote(**resumen) y rechazan claves nuevas.
+        datos = asdict(self)
+        del datos['bloqueos_marc']
+        return datos
+
 
 def acciones_lote(lote, ocupado=False, fuente_validada=False, destino_coincide=False, demostracion=False,
                   lote_activo_id=None, detencion_solicitada=False):
@@ -198,6 +208,7 @@ class HistorialLotes:
         try:
             with conexion:
                 conexion.execute('CREATE TABLE IF NOT EXISTS lotes (id TEXT PRIMARY KEY, resumen TEXT NOT NULL)')
+                conexion.execute('CREATE TABLE IF NOT EXISTS validacion_marc (lote TEXT PRIMARY KEY, bloqueos INTEGER NOT NULL)')
                 conexion.execute(
                     'CREATE TABLE IF NOT EXISTS resultados ('
                     'lote TEXT NOT NULL, posicion INTEGER NOT NULL, datos TEXT NOT NULL, '
@@ -211,8 +222,8 @@ class HistorialLotes:
     def _cargar_incrementales(self):
         try:
             with closing(self._conexion_detalle()) as conexion:
-                lotes = [Lote(**json.loads(fila[0])) for fila in conexion.execute(
-                    'SELECT resumen FROM lotes ORDER BY rowid'
+                lotes = [Lote(**json.loads(resumen), bloqueos_marc=bloqueos) for resumen, bloqueos in conexion.execute(
+                    'SELECT l.resumen, v.bloqueos FROM lotes l LEFT JOIN validacion_marc v ON v.lote=l.id ORDER BY l.rowid'
                 )]
             for lote in lotes:
                 lote.validar(detalle=False)
@@ -245,8 +256,13 @@ class HistorialLotes:
                 conexion.execute(
                     'INSERT INTO lotes (id, resumen) VALUES (?, ?) '
                     'ON CONFLICT(id) DO UPDATE SET resumen=excluded.resumen',
-                    (lote.id, json.dumps(asdict(lote), ensure_ascii=False)),
+                    (lote.id, json.dumps(lote.datos_historial(), ensure_ascii=False)),
                 )
+                if lote.bloqueos_marc is not None:
+                    conexion.execute('INSERT INTO validacion_marc (lote,bloqueos) VALUES (?, ?) ON CONFLICT(lote) '
+                                     'DO UPDATE SET bloqueos=excluded.bloqueos', (lote.id, lote.bloqueos_marc))
+                else:
+                    conexion.execute('DELETE FROM validacion_marc WHERE lote=?', (lote.id,))
         except sqlite3.Error as exc:
             raise OSError(f'No se pudo guardar el avance del lote: {exc}') from exc
 
@@ -269,7 +285,8 @@ class HistorialLotes:
             documento = json.loads(self.ruta.read_text(encoding='utf-8'))
             if documento.get('version') != 1 or not isinstance(documento.get('lotes'), list):
                 raise ValueError('Formato no reconocido.')
-            lotes = [Lote(**dato) for dato in documento['lotes']]
+            bloqueos = documento.get('bloqueos_marc', {})
+            lotes = [Lote(**dato, bloqueos_marc=bloqueos.get(dato.get('id'))) for dato in documento['lotes']]
             if len({lote.id for lote in lotes}) != len(lotes):
                 raise ValueError('Identificadores repetidos.')
             for lote in lotes:
@@ -301,7 +318,11 @@ class HistorialLotes:
         try:
             with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=self.ruta.parent, delete=False) as archivo:
                 temporal = archivo.name
-                json.dump({'version': 1, 'lotes': [asdict(lote) for lote in lotes]}, archivo, ensure_ascii=False, indent=2)
+                documento = {'version': 1, 'lotes': [lote.datos_historial() for lote in lotes]}
+                bloqueos = {lote.id: lote.bloqueos_marc for lote in lotes if lote.bloqueos_marc is not None}
+                if bloqueos:
+                    documento['bloqueos_marc'] = bloqueos
+                json.dump(documento, archivo, ensure_ascii=False, indent=2)
             os.replace(temporal, self.ruta)
         finally:
             if temporal and os.path.exists(temporal):
@@ -340,6 +361,57 @@ class HistorialLotes:
                 "ORDER BY posicion LIMIT ? OFFSET ?", (identificador, cantidad, inicio),
             )
             return [json.loads(f[0]) for f in filas]
+
+    def posicion_convertida(self, identificador, ficha):
+        """Índice dentro de las convertidas, en el mismo orden que pagina_convertidas."""
+        with self._lock:
+            lote = next((l for l in self._lotes if l.id == identificador), None)
+            if lote is None:
+                return None
+            if identificador not in self._incrementales:
+                return next((i for i, valor in enumerate(lote.fichas_correctas) if valor == ficha), None)
+        with closing(self._conexion_detalle()) as conexion:
+            fila = conexion.execute(
+                "SELECT posicion FROM resultados WHERE lote=? AND json_extract(datos, '$.id')=? "
+                "AND json_extract(datos, '$.estado')='Convertida' LIMIT 1", (identificador, ficha),
+            ).fetchone()
+            if fila:
+                return conexion.execute(
+                    "SELECT COUNT(*) FROM resultados WHERE lote=? AND posicion<? "
+                    "AND json_extract(datos, '$.estado')='Convertida'", (identificador, fila[0]),
+                ).fetchone()[0]
+
+    def bloqueos_anteriores(self, identificador):
+        """Recupera errores registrados por el validador 2.2 desde el detalle completo."""
+        with self._lock:
+            lote = next((l for l in self._lotes if l.id == identificador), None)
+            if lote is None or lote.version_mapeo != '2.2':
+                return None
+            incremental = identificador in self._incrementales
+        def contar(filas):
+            cantidad = 0
+            ejemplos = []
+            for fila in filas:
+                if fila['estado'] != 'Convertida':
+                    continue
+                for motivo in fila['motivos']:
+                    _, _, detalle = motivo.partition(': ')
+                    if detalle.startswith(('Error · ', 'Error de estructura. Borrador')):
+                        cantidad += 1
+                        if len(ejemplos) < 5:
+                            ejemplos.append(f"Ficha {fila['id']} · {detalle}")
+                        break
+            return cantidad, ejemplos
+
+        if not incremental:
+            return contar(lote.resultados) if lote.resultados is not None else None
+        with closing(self._conexion_detalle()) as conexion:
+            filas = conexion.execute(
+                "SELECT datos FROM resultados WHERE lote=? AND "
+                "(instr(datos, ': Error · ') OR instr(datos, ': Error de estructura. Borrador')) "
+                "ORDER BY posicion", (identificador,),
+            )
+            return contar(json.loads(dato) for dato, in filas)
 
     def _persistir(self, lote, *, incremental=False, filas=()):
         lotes = self._lotes.copy()
@@ -401,7 +473,7 @@ class HistorialLotes:
         permitidos = {'estado', 'etapa', 'total_objetivo', 'destino', 'version_mapeo',
                       'huella_mapeo', 'correctos', 'omitidos', 'errores', 'ejemplares',
                       'fichas_correctas', 'incidencias', 'resultados', 'usuario',
-                      'omitir_existentes', 'iniciado_en'}
+                      'omitir_existentes', 'iniciado_en', 'bloqueos_marc'}
         mensaje = cambios.pop('evento', None)
         if set(cambios) - permitidos:
             raise ValueError('Se intentó cambiar un campo no permitido del lote.')

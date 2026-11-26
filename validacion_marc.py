@@ -32,6 +32,7 @@ class Incidencia:
     subcampo: str = ''
     ocurrencia: int = 0
     regla: str = 'MARC21'
+    codigo: str = ''
 
     def texto(self):
         lugar = self.campo + ('$' + self.subcampo if self.subcampo else '')
@@ -143,6 +144,13 @@ def normalizar_posiciones_libro(campos):
     return cambios
 
 
+def fuente_catalogacion_008(codigo):
+    """008/39 de Access: conserva el código conocido o usa el relleno MARC."""
+    minuscula = codigo.lower()
+    permitidos = CATALOGO['posiciones_008']['ALL MATERIALS']['39-39']
+    return minuscula if len(minuscula) == 1 and minuscula in permitidos else '|'
+
+
 def _revisar_008(valor, leader, problemas):
     def error(pos, texto):
         problemas.append(Incidencia(ERROR, '008', f'{pos} · {texto}'))
@@ -206,8 +214,8 @@ def validar_ficha(record, perfil=None):
         vistos[tag] += 1
         n = vistos[tag]
 
-        def add(texto, sub='', gravedad=ERROR, regla='MARC21'):
-            issues.append(Incidencia(gravedad, tag, texto, sub, n, regla))
+        def add(texto, sub='', gravedad=ERROR, regla='MARC21', codigo=''):
+            issues.append(Incidencia(gravedad, tag, texto, sub, n, regla, codigo))
 
         try:
             longitud = len(field.as_marc(encoding='utf-8'))
@@ -284,12 +292,12 @@ def validar_ficha(record, perfil=None):
         if tag == '020':
             for isbn in field.get_subfields('a'):
                 if not isbn_valido(isbn):
-                    add('Verifica el ISBN y su dígito de control.', 'a', AVISO, 'Calidad')
+                    add('Verifica el ISBN y su dígito de control.', 'a', AVISO, 'Calidad', 'isbn:' + isbn)
 
     if bytes_registro > 99999:
         issues.append(Incidencia(ERROR, 'LDR', 'La longitud del registro supera los 99 999 bytes que admite ISO2709.'))
-    def aviso(tag, texto, sub=''):
-        issues.append(Incidencia(AVISO, tag, texto, sub, regla='Calidad'))
+    def aviso(tag, texto, sub='', codigo=''):
+        issues.append(Incidencia(AVISO, tag, texto, sub, regla='Calidad', codigo=codigo))
     principales = record.get_fields('100', '110', '111', '130')
     if len({f.tag for f in principales}) > 1:
         issues.append(Incidencia(ERROR, principales[-1].tag, 'Sólo se admite una entrada principal 1XX.'))
@@ -316,10 +324,10 @@ def validar_ficha(record, perfil=None):
     if fijo and len(fijo.data or '') == 40:
         valor = fijo.data
         if '|' in valor[18:35]:
-            aviso('008', 'Hay posiciones de material sin codificar (|). Consulta el origen conservado cuando esté disponible.')
+            aviso('008', 'Hay posiciones de material sin codificar (|). Consulta el origen conservado cuando esté disponible.', codigo='008-material')
         idiomas = [v for f in record.get_fields('041') for v in f.get_subfields('a')]
         if idiomas and valor[35:38] not in ('und', 'mul', '|||', '   ') and valor[35:38] != idiomas[0][:3]:
-            aviso('041', 'El primer idioma difiere de 008/35–37.', 'a')
+            aviso('041', 'El primer idioma difiere de 008/35–37.', 'a', '041-idioma')
         fechas = [v for f in publicaciones for v in f.get_subfields('c')]
         if fechas and valor[6] == 's' and valor[7:11].isdigit() and not any(valor[7:11] in v for v in fechas):
             aviso('008', 'El año en 07–10 difiere de la fecha de publicación.')

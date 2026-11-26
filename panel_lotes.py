@@ -9,16 +9,17 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 from tempfile import NamedTemporaryFile
 from threading import Thread
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from xml.sax import SAXException
 from xml.etree import ElementTree
 from pymarc import Field, JSONReader, MARCReader, Record, Subfield, parse_xml_to_array
 from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
-from validacion_marc import (ERROR as ERROR_MARC, estado_ficha, es_repetible, inspeccionar_copias,
+from validacion_marc import (ERROR as ERROR_MARC, estado_ficha, es_repetible, fuente_catalogacion_008, inspeccionar_copias,
                              validar_ficha)
 
 from lotes import ESTADOS, ETAPAS, lotes_de_ejemplo
@@ -41,6 +42,37 @@ def _celda_csv(valor):
     if isinstance(valor, str) and valor.lstrip().startswith(('=', '+', '-', '@')):
         return "'" + valor
     return valor
+
+
+def texto_incidencias_lote(lote, anteriores=None, mostrar_advertencias=False):
+    bloqueos = lote.bloqueos_marc
+    ejemplos = []
+    if bloqueos is None and anteriores is not None:
+        bloqueos, ejemplos = anteriores
+    conteo = f'{bloqueos:,}' if bloqueos is not None else 'sin conteo registrado'
+    lineas = [f'Rechazadas al migrar: {lote.errores:,} · Convertidas con bloqueo MARC al migrar: {conteo}.',
+              'Las advertencias permiten exportar. En Revisar fichas puedes consultar las correcciones y la validación actual.']
+    if ejemplos:
+        lineas.extend(['', *ejemplos])
+    grupos = defaultdict(list)
+    ocultas = 0
+    for item in lote.incidencias:
+        ficha, _, campo = item['referencia'].partition(' · ')
+        mensaje = item['mensaje']
+        if campo and not mensaje.startswith(('Error · ', 'Error de estructura.')) and not mostrar_advertencias:
+            ocultas += 1
+        else:
+            grupos[campo, mensaje].append(ficha)
+    if ocultas:
+        lineas.append(f'Activa «Mostrar advertencias» para ver {ocultas} avisos de la muestra agrupados por motivo.')
+    if grupos:
+        lineas.extend(['', f'Incidencias visibles en la muestra: {len(lote.incidencias) - ocultas} de {len(lote.incidencias)}.'])
+    for (campo, motivo), referencias in grupos.items():
+        ejemplos_fichas = ', '.join(dict.fromkeys(referencias[:3]))
+        if len(referencias) > 3:
+            ejemplos_fichas += ', …'
+        lineas.append(f'{len(referencias)} × {campo + " · " if campo else ""}{motivo}\n   {ejemplos_fichas}')
+    return '\n'.join(lineas)
 
 
 def escribir_reporte_lote(ruta, lote, demostracion=False):
@@ -70,6 +102,7 @@ def escribir_reporte_lote(ruta, lote, demostracion=False):
                     'recibidos': lote.total_recibidos, 'objetivo': lote.total_objetivo,
                     'convertidas': lote.correctos, 'omitidas': lote.omitidos,
                     'rechazadas': lote.errores, 'pendientes': lote.pendientes,
+                    'bloqueos_marc_al_migrar': lote.bloqueos_marc,
                     'fuera_del_alcance': lote.total_recibidos - lote.total_objetivo,
                     'ejemplares': lote.ejemplares, 'trazabilidad_completa': 'Sí' if traza_completa else 'No',
                     'demostracion': 'Sí' if demostracion else 'No',
@@ -492,11 +525,16 @@ class PanelLotes(ttk.Frame):
     def __init__(self, parent, listar, politica, iniciar, exportar, revisar,
                  proponer, listar_propuestas, resolver_propuesta,
                  listar_observaciones, registrar_observacion,
-                 conexiones, detener, reprocesar, obtener, publicar, framework=None):
+                 conexiones, detener, reprocesar, obtener, publicar, framework=None,
+                 posicion_convertida=None, bloqueos_anteriores=None):
         super().__init__(parent, padding=24, style='Panel.TFrame')
         self.framework = framework or dict
         self.listar = listar
         self.obtener = obtener
+        self.posicion_convertida = posicion_convertida
+        self.bloqueos_anteriores = bloqueos_anteriores
+        self._conteos_anteriores = {}
+        self.mostrar_advertencias = tk.BooleanVar(value=False)
         self.publicar = publicar
         self.politica = politica
         self.iniciar = iniciar
@@ -942,9 +980,12 @@ class PanelLotes(ttk.Frame):
         ):
             marco.columnconfigure(0, weight=1)
             marco.rowconfigure(1, weight=1)
-            ttk.Label(
-                marco, text=titulo, style='Nombre.TLabel',
-            ).grid(row=0, column=0, sticky='w', pady=(0, ESPACIO_M))
+            cabecera = ttk.Frame(marco, style='Tarjeta.TFrame')
+            cabecera.grid(row=0, column=0, sticky='ew', pady=(0, ESPACIO_M))
+            ttk.Label(cabecera, text=titulo, style='Nombre.TLabel').pack(side='left')
+            if clave == 'incidencias':
+                ttk.Checkbutton(cabecera, text='Mostrar advertencias', variable=self.mostrar_advertencias,
+                                command=self._pintar_detalle).pack(side='right')
             texto = tk.Text(
                 marco, wrap='word', font=(FUENTE, TAM_CUERPO),
                 background=SUPERFICIE_ALT, foreground=TEXTO,
@@ -1054,6 +1095,8 @@ class PanelLotes(ttk.Frame):
             raise ValueError(f'Vista de detalle no reconocida: {clave}')
         self._detalle_actual = clave
         self._detalle_vistas[clave].tkraise()
+        if clave == 'incidencias':
+            self._consultar_bloqueos_anteriores()
         for nombre, boton in self._detalle_botones.items():
             seleccionada = nombre == clave
             boton.configure(
@@ -1061,6 +1104,28 @@ class PanelLotes(ttk.Frame):
                 fg=PRIMARIO if seleccionada else TEXTO_SECUNDARIO,
                 font=(FUENTE, 9, 'bold' if seleccionada else 'normal'),
             )
+
+    def _consultar_bloqueos_anteriores(self):
+        lote = self.lote_actual()
+        if (not lote or lote.bloqueos_marc is not None or lote.version_mapeo != '2.2'
+                or lote.id in self._conteos_anteriores or not self.bloqueos_anteriores):
+            return
+        self._conteos_anteriores[lote.id] = None
+
+        def mostrar(resultado):
+            self._conteos_anteriores[lote.id] = resultado
+            if self.seleccionado == lote.id:
+                self._pintar_detalle()
+
+        def consultar():
+            try:
+                resultado = self.bloqueos_anteriores(lote.id)
+            except (OSError, ValueError, sqlite3.Error) as exc:
+                self.publicar(self._conteos_anteriores.pop, lote.id, None)
+                self.publicar(messagebox.showerror, 'Consulta del historial', str(exc))
+            else:
+                self.publicar(mostrar, resultado)
+        Thread(target=consultar, daemon=True).start()
 
     def _mostrar_vista(self, clave):
         if clave not in self._vistas_contenido:
@@ -1133,7 +1198,7 @@ class PanelLotes(ttk.Frame):
             return 'Aún no hay migraciones registradas. Inicia una nueva migración para ver aquí el estado general.'
         return (
             f'{activos} migraciones activas · {pendientes:,} fichas pendientes · '
-            f'{errores:,} fichas con error · {incidencias:,} incidencias registradas · '
+            f'{errores:,} rechazadas al migrar · {incidencias:,} incidencias en las muestras del historial · '
             f'{tasa} de fichas convertidas sobre las procesadas.'
         )
 
@@ -1228,7 +1293,7 @@ class PanelLotes(ttk.Frame):
             'lote', 'fuente', 'usuario', 'fecha_ejecucion', 'lote_anterior',
             'estado', 'etapa', 'progreso_porcentaje',
             'recibidos', 'objetivo', 'procesados', 'pendientes', 'correctos',
-            'omitidos', 'errores', 'ejemplares', 'servidor_destino',
+            'omitidos', 'errores', 'bloqueos_marc_al_migrar', 'ejemplares', 'servidor_destino',
             'base_datos', 'creado_en', 'actualizado_en', 'version_mapeo',
         )
         try:
@@ -1252,6 +1317,7 @@ class PanelLotes(ttk.Frame):
                         'correctos': lote.correctos,
                         'omitidos': lote.omitidos,
                         'errores': lote.errores,
+                        'bloqueos_marc_al_migrar': lote.bloqueos_marc,
                         'ejemplares': lote.ejemplares,
                         'servidor_destino': lote.destino.get('host', ''),
                         'base_datos': lote.destino.get('database', ''),
@@ -1353,9 +1419,14 @@ class PanelLotes(ttk.Frame):
                 + f'\n{ETAPAS[lote.etapa]}'
             ))
             animar_valor(self.barra, lote.progreso)
+            bloqueos = lote.bloqueos_marc
+            anteriores = self._conteos_anteriores.get(lote.id)
+            if bloqueos is None and anteriores is not None:
+                bloqueos = anteriores[0]
             self.conteos.config(text=(
                 f'Procesadas  {lote.procesados:,} / {lote.total_objetivo:,}  ·  {lote.progreso:g} %\n'
                 f'Ejemplares guardados  {lote.ejemplares:,}'
+                + (f'\nConvertidas con bloqueo MARC al migrar  {bloqueos:,}' if bloqueos is not None else '')
             ))
             for campo, valor in self.metricas_lote.items():
                 valor.config(text=f'{getattr(lote, campo):,}')
@@ -1378,16 +1449,9 @@ class PanelLotes(ttk.Frame):
                 siguiente = f'Reprocesamiento de {lote.lote_origen}. {siguiente}'
             self.siguiente.config(text=siguiente)
             self.actualizado.config(text='Última actualización: ' + datetime.fromisoformat(lote.actualizado_en).strftime('%d/%m/%Y %H:%M:%S'))
-            detalle_incidencias = '\n\n'.join(
-                f'{item["referencia"]}\n{item["mensaje"]}'
-                for item in lote.incidencias
-            )
-            texto_incidencias = (
-                f'{lote.errores:,} fichas con error · '
-                f'{len(lote.incidencias):,} incidencias recientes al migrar. Abre Revisar fichas para consultar su estado actual.\n\n'
-                f'{detalle_incidencias}'
-            )
-            self._actualizar_texto_lote('incidencias', texto_incidencias)
+            self._actualizar_texto_lote('incidencias', texto_incidencias_lote(lote, anteriores, self.mostrar_advertencias.get()))
+            if self._detalle_actual == 'incidencias' and self._historial_pagina_actual == 'detalle':
+                self._consultar_bloqueos_anteriores()
             tecnico = (
                 f'Lote {lote.id}\n'
                 f'Versión del mapeo: {lote.version_mapeo or "Sin registrar"}\n'
@@ -2286,6 +2350,20 @@ class PanelLotes(ttk.Frame):
                 except ValueError as exc:
                     messagebox.showerror('Leader no válido', str(exc), parent=editor)
             ttk.Button(barra_editor, text='Validar ficha', command=validar_edicion).pack(side='left')
+            fijo = record.get('008')
+            if fijo and len(fijo.data or '') == 40 and fuente_catalogacion_008(fijo.data[39]) != fijo.data[39]:
+                def ajustar_fuente():
+                    seleccion = tabla_edicion.selection()
+                    if not seleccion or campos_editables[int(seleccion[0])].tag != '008' or tag_var.get() != '008':
+                        messagebox.showinfo('Fuente de catalogación', 'Selecciona el campo 008.', parent=editor)
+                        return
+                    valor = contenido_editor.get('1.0', 'end-1c')
+                    if len(valor) != 40:
+                        messagebox.showwarning('Campo 008', 'El campo debe tener 40 caracteres.', parent=editor)
+                        return
+                    contenido_editor.replace('1.0', 'end-1c', valor[:39] + fuente_catalogacion_008(valor[39]))
+                    actualizar_campo()
+                ttk.Button(barra_editor, text='Ajustar 008/39', command=ajustar_fuente).pack(side='left', padx=6)
             ttk.Button(
                 barra_editor, text='Volver a revisión',
                 command=lambda: cerrar_pagina_auxiliar('editor', pagina_editor),
@@ -2583,6 +2661,39 @@ class PanelLotes(ttk.Frame):
         saltos.grid(row=2, column=0, columnspan=2, sticky='ew')
         for indice, (etiqueta, sentido) in enumerate((('← Incidencia', -1), ('Incidencia →', 1))):
             ttk.Button(saltos, text=etiqueta, command=lambda d=sentido: buscar_incidencia(d)).grid(row=0, column=indice, sticky='ew')
+        if self.posicion_convertida:
+            def ir_a_ficha():
+                nonlocal busqueda_pendiente
+                ficha = simpledialog.askinteger('Ir a ficha', 'Número de ficha de Access:', parent=ventana, minvalue=0)
+                if ficha is None:
+                    return
+                if busqueda_pendiente is not None:
+                    ventana.after_cancel(busqueda_pendiente)
+                    busqueda_pendiente = None
+                boton_ir.state(['disabled'])
+
+                def mostrar_posicion(posicion, error=None):
+                    if not ventana.winfo_exists():
+                        return
+                    boton_ir.state(['!disabled'])
+                    if error:
+                        messagebox.showerror('Ir a ficha', error, parent=ventana)
+                    elif posicion is None:
+                        messagebox.showinfo('Ir a ficha', f'La ficha {ficha} no figura entre las convertidas de este lote.', parent=ventana)
+                    else:
+                        cargar_pagina(posicion // tamano_pagina * tamano_pagina, seleccionar=ficha)
+
+                def consultar():
+                    try:
+                        posicion = self.posicion_convertida(lote.id, ficha)
+                    except (OSError, ValueError, sqlite3.Error) as exc:
+                        self.publicar(mostrar_posicion, None, str(exc))
+                    else:
+                        self.publicar(mostrar_posicion, posicion)
+                Thread(target=consultar, daemon=True).start()
+
+            boton_ir = ttk.Button(listado, text='Ir a ficha…', command=ir_a_ficha)
+            boton_ir.grid(row=3, column=0, columnspan=2, sticky='w', pady=ESPACIO_XS)
         lista_registros.bind('<<TreeviewSelect>>', mostrar_registro)
         boton_anterior = ttk.Button(
             navegacion_pagina, text='← Anterior',

@@ -73,7 +73,10 @@ def exportar_lote(ruta, lote, writer, perfil=None):
             if formato != '.mrc':
                 stream.write(b'</collection>\n')
             if (excluidas and formato != '.zip') or not exportadas:
-                raise ValueError(f'{excluidas} fichas con errores. Abre «Revisar fichas» para corregirlas.\n' + '\n'.join(ejemplos))
+                if excluidas:
+                    raise ValueError(f'Fichas guardadas con bloqueo MARC: {excluidas:,}. '
+                                     'En «Revisar fichas», usa «Ir a ficha…» para corregirlas.\n' + '\n'.join(ejemplos))
+                raise ValueError('El lote no contiene fichas convertidas para exportar.')
             if formato == '.zip':
                 stream.close()
                 informe.seek(0)

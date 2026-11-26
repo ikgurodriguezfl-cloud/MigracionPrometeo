@@ -40,8 +40,8 @@ class IntegracionSprint2Tests(unittest.TestCase):
             'DatosFijos': '261118s2020    mx ' + ' ' * 11 + '000 0 spa d',
             'EtiquetasMARC': '¦260Tepic :Editorial,2020.¦30010 páginas¦650Bibliotecas',
         }, [])
-        self.app.marc_converter.record_a_marcxml.return_value = '<record></record>'
-        self.app.marc_converter.record_a_iso2709.return_value = b'marc'
+        self.app.marc_converter.record_a_marcxml.side_effect = MarcConverter().record_a_marcxml
+        self.app.marc_converter.record_a_iso2709.side_effect = MarcConverter().record_a_iso2709
         self.app.log = Mock()
         self.lector = Mock()
         self.lector.contar_fichas.return_value = 3
@@ -68,6 +68,25 @@ class IntegracionSprint2Tests(unittest.TestCase):
                          [(1, 'Convertida'), (2, 'Omitida'), (3, 'Convertida')])
         self.assertGreater(self.app._eventos_ui.qsize(), 0)
         self.lector.close.assert_called_once(); self.escritor.close.assert_called_once()
+
+    def test_bloqueos_se_cuentan_por_ficha_y_separados_de_rechazos(self):
+        record = self.app.marc_converter.ficha_a_record.return_value
+        record.remove_fields('245', '040')
+        self.escritor.registrar_existe.side_effect = [False, True, False]
+        self.escritor.insertar_registro_marc.side_effect = [1, ValueError('Falló el guardado')]
+        lote = self.ejecutar()
+        self.assertEqual((lote.correctos, lote.omitidos, lote.errores, lote.bloqueos_marc), (1, 1, 1, 1))
+        self.assertEqual(lote.procesados, 3)
+        resumen = HistorialLotes(self.historial.ruta).obtener(lote.id, resumen=True)
+        self.assertEqual(resumen.bloqueos_marc, 1)
+        self.assertTrue(any('245' in motivo for motivo in lote.resultados[0]['motivos']))
+
+    def test_borradores_y_copias_inconsistentes_cuentan_como_bloqueadas(self):
+        self.app.marc_converter.record_a_marcxml.side_effect = [ValueError('demasiado largo'), '<xml/>']
+        self.escritor.registrar_existe.side_effect = [False, False, True]
+        lote = self.ejecutar()
+        self.assertEqual((lote.correctos, lote.bloqueos_marc, lote.errores), (2, 2, 0))
+        self.escritor.insertar_borrador.assert_called_once()
 
     def test_reprocesamiento_no_reemplaza_registros_y_completa_ejemplares_faltantes(self):
         origen = self.historial.actualizar(

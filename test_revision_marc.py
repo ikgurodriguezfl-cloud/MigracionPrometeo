@@ -4,10 +4,11 @@ from copy import deepcopy
 from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import time
 import unittest
 import tkinter as tk
 from tkinter import ttk
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from zipfile import ZipFile
 
 from pymarc import Field, MARCReader, Subfield, parse_xml_to_array
@@ -17,7 +18,7 @@ from gui_app import MigracionApp
 from lotes import HistorialLotes, Lote
 from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
-from panel_lotes import parsear_subcampos, record_para_edicion, serializar_registro, texto_subcampos
+from panel_lotes import parsear_subcampos, record_para_edicion, serializar_registro, texto_incidencias_lote, texto_subcampos
 from validacion_marc import ERROR, cargar_framework, es_repetible, estado_ficha, inspeccionar_copias, validar_ficha
 
 
@@ -35,6 +36,102 @@ def copias(record, numero):
 
 
 class RevisionMarcTests(unittest.TestCase):
+    def test_fuente_008_solo_cambia_la_ultima_posicion_y_conserva_original(self):
+        conversor = MarcConverter()
+        prefijo = ficha()['008'].data[:39]
+        for origen, esperado in [('D', 'd'), ('g', '|'), ('C', 'c'), (' ', ' '), ('|', '|'), ('u', 'u')]:
+            with self.subTest(origen=origen):
+                original = prefijo + origen
+                record = conversor.ficha_a_record(dict(Ficha_No=1, Titulo='Obra', DatosFijos=original), [])
+                self.assertEqual(record['008'].data, prefijo + esperado)
+                self.assertIn(original, record['887']['a'])
+                xml, iso = serializar_registro(record)
+                self.assertFalse(any(i.gravedad == ERROR for i in inspeccionar_copias(xml, iso)[1]))
+
+    def test_avisos_de_material_se_deduplican_sin_perder_otros_avisos_008(self):
+        app = MigracionApp.__new__(MigracionApp)
+        app.marc_converter = MarcConverter()
+        fijo = ficha()['008'].data
+        datos = dict(Ficha_No=8, Titulo='Obra', DatosFijos=fijo[:22] + '?' + fijo[23:],
+                     EtiquetasMARC='¦260Tepic :Editorial,1975.')
+        _, avisos = app._convertir_y_guardar_ficha(Mock(), datos, 8, [], {}, {})
+        observaciones = [mensaje for campo, mensaje, _ in avisos if campo == '008']
+        self.assertTrue(any('incompatibles con libros' in m for m in observaciones))
+        self.assertFalse(any('Hay posiciones de material' in m for m in observaciones))
+        self.assertTrue(any('difiere de la fecha' in m for m in observaciones))
+
+    def test_historial_22_recupera_bloqueos_fuera_de_la_muestra_y_ubica_fichas(self):
+        with TemporaryDirectory() as td:
+            historial = HistorialLotes(Path(td) / 'historial.json')
+            lote = historial.recibir('copia.mdb', 3, incremental=True)
+            filas = [dict(id=n, estado=estado, motivos=motivos, referencia=f'Ficha {n}', titulo='Libro')
+                     for n, estado, motivos in [(10, 'Omitida', ['Ya existe']),
+                         (11, 'Convertida', ['008: Error · 008 · 39-39', '245: Error · 245 · título']),
+                         (12, 'Convertida', ['008: Advertencia · 008'])]]
+            muestra = [dict(referencia=f'Ficha {f} · 020', mensaje='Sin ISBN') for f in (11, 12)]
+            historial.actualizar(lote.id, estado='con_incidencias', etapa='revision', filas=filas,
+                                 version_mapeo='2.2', huella_mapeo='0'*64, correctos=2, omitidos=1, incidencias=muestra)
+            anterior = historial.bloqueos_anteriores(lote.id)
+            self.assertEqual(anterior[0], 1)
+            lote = historial.obtener(lote.id, resumen=True)
+            texto = texto_incidencias_lote(lote, anterior)
+            self.assertIn('Ficha 11 · Error', texto)
+            self.assertNotIn('Sin ISBN', texto)
+            texto = texto_incidencias_lote(lote, anterior, mostrar_advertencias=True)
+            self.assertIn('2 × 020', texto)
+            self.assertIsNone(historial.posicion_convertida(lote.id, 10))
+            self.assertEqual(historial.posicion_convertida(lote.id, 12), 1)
+
+    def test_ir_a_ficha_anterior_y_proponer_ajuste_008(self):
+        with TemporaryDirectory() as td:
+            root = tk.Tk()
+            root.withdraw()
+            app = MigracionApp(root, HistorialLotes(Path(td) / 'historial.json'))
+            self.addCleanup(app.cerrar)
+            panel = app.panel_lotes
+            lote = Lote('LOTE-QA', 'copia.mdb', 51, 51, correctos=51)
+            panel.lote_actual = Mock(return_value=lote)
+            panel.politica = Mock(return_value={'revision': True, 'proponer_correccion': True})
+            panel.posicion_convertida = Mock(return_value=50)
+            record = ficha(2316)
+            prefijo = record['008'].data[:39]
+            record['008'].data = prefijo + 'g'
+            guardada = dict(copias(record, 2316), huella_revision='huella anterior')
+            panel.revisar = Mock(side_effect=lambda lote, inicio, cantidad: [guardada] if inicio else [copias(ficha(), 1)])
+            panel.proponer = Mock(return_value=1)
+
+            def descendientes(padre):
+                for hijo in padre.winfo_children():
+                    yield hijo
+                    yield from descendientes(hijo)
+
+            def pulsar(padre, texto):
+                next(w for w in descendientes(padre) if isinstance(w, ttk.Button) and w.cget('text') == texto).invoke()
+
+            panel._revisar()
+            revision = panel._historial_paginas['revision']
+            with patch('panel_lotes.simpledialog.askinteger', return_value=2316):
+                pulsar(revision, 'Ir a ficha…')
+            limite = time.monotonic() + 3
+            while time.monotonic() < limite and panel.revisar.call_count < 2:
+                root.update()
+            panel.revisar.assert_called_with(lote.id, 50, 50)
+            root.update()
+            pulsar(revision, 'Corregir / proponer')
+            root.update()
+            editor = panel._historial_paginas['editor']
+            with patch('panel_lotes.messagebox.showinfo'), patch('panel_lotes.messagebox.showwarning'):
+                pulsar(editor, 'Ajustar 008/39')
+                root.update()
+                pulsar(editor, 'Enviar a aprobación')
+            panel.proponer.assert_called_once()
+            ident, num, xml, iso, huella = panel.proponer.call_args.args
+            self.assertEqual((ident, num, huella), (lote.id, 2316, 'huella anterior'))
+            nueva, issues = inspeccionar_copias(xml, iso)
+            self.assertEqual(nueva['008'].data, prefijo + '|')
+            self.assertFalse(any(i.gravedad == ERROR for i in issues))
+            self.assertEqual(record['008'].data, prefijo + 'g')
+
     def test_tres_estados_y_correccion_sin_inventar_datos(self):
         rec = ficha()
         self.assertEqual(estado_ficha(validar_ficha(rec)), 'Válida')
@@ -201,7 +298,6 @@ class RevisionMarcTests(unittest.TestCase):
                     yield from widgets(hijo)
             avanzar = next(w for w in widgets(revision) if isinstance(w, ttk.Button) and w.cget('text') == 'Incidencia →')
             avanzar.invoke()
-            import time
             inicio = time.monotonic()
             while time.monotonic() - inicio < 1:
                 root.update()

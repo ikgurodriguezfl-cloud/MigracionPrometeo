@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any, List
 from auth import AuthenticationService
 from access_reader import AccessReader
 from marc_converter import MarcConverter
-from validacion_marc import cargar_framework, validar_ficha
+from validacion_marc import ERROR as ERROR_MARC, Incidencia, cargar_framework, inspeccionar_copias, validar_ficha
 from exportacion_marc import exportar_lote
 from mysql_writer import MySQLWriter
 from lotes import ETAPAS, HistorialLotes, acciones_lote, ahora
@@ -224,6 +224,8 @@ class MigracionApp:
             obtener=self.historial_lotes.obtener, publicar=self._publicar_ui, politica=self._politica_lote,
             iniciar=self._iniciar_desde_panel, exportar=self._exportar_marcxml,
             revisar=self._obtener_registros_revision, framework=self._framework_actual,
+            posicion_convertida=self.historial_lotes.posicion_convertida,
+            bloqueos_anteriores=self.historial_lotes.bloqueos_anteriores,
             proponer=self._proponer_correccion,
             listar_propuestas=self._listar_correcciones_pendientes,
             resolver_propuesta=self._resolver_correccion,
@@ -1732,17 +1734,19 @@ class MigracionApp:
     def _ejecutar_migracion(self, path_access, config_mysql, limite, saltar,
                             branch_mapping, status_mapping, lote_id, *, firma=None):
         reader = writer = bloques = None
-        cont_ok = cont_err = cont_omitidos = cont_ejemplares = 0
+        cont_ok = cont_err = cont_omitidos = cont_ejemplares = bloqueos_marc = 0
         filas_nuevas = []
         incidencias = deque(maxlen=100)
-        total_incidencias = 0
+        prioritarias = deque(maxlen=100)
+        con_advertencias = 0
         ultimo_avance = monotonic()
 
         def guardar_avance(**extra):
             self.historial_lotes.actualizar(
                 lote_id, filas=filas_nuevas, correctos=cont_ok, errores=cont_err,
                 omitidos=cont_omitidos, ejemplares=cont_ejemplares,
-                incidencias=list(incidencias), **extra,
+                bloqueos_marc=bloqueos_marc,
+                incidencias=(list(prioritarias) + list(reversed(incidencias)))[:100], **extra,
             )
             filas_nuevas.clear()
             self._publicar_ui(self._mostrar_avance_lote, lote_id)
@@ -1814,7 +1818,7 @@ class MigracionApp:
                                         signatura=ficha.get('Clasificacion'),
                                     )
                                     avisos = [
-                                        ('Biblioteca', f'No contemplado: Biblioteca={codigo!r} sin sucursal Koha.')
+                                        ('Biblioteca', f'No contemplado: Biblioteca={codigo!r} sin sucursal Koha.', False)
                                         for codigo in sorted(set(sucursales))
                                     ]
                                 else:
@@ -1823,10 +1827,11 @@ class MigracionApp:
                                         branch_mapping, status_mapping,
                                     )
                             cont_ejemplares += agregados
-                            total_incidencias += len(avisos)
-                            for campo, mensaje in avisos:
+                            bloqueada = any(bloquea for _, _, bloquea in avisos)
+                            for campo, mensaje, bloquea in avisos:
                                 motivos.append(f'{campo}: {mensaje}')
-                                incidencias.append({
+                                muestra = prioritarias if bloquea else incidencias
+                                muestra.append({
                                     'referencia': referencia + ' · ' + campo, 'mensaje': mensaje,
                                 })
                             if existe:
@@ -1835,13 +1840,15 @@ class MigracionApp:
                                 motivos.append(f'Ficha existente. Ejemplares agregados: {agregados}.')
                             else:
                                 cont_ok += 1
+                                bloqueos_marc += bloqueada
+                                if avisos and not bloqueada:
+                                    con_advertencias += 1
                                 estado_ficha = 'Convertida'
                     except Exception as exc:
-                        total_incidencias += 1
                         cont_err += 1
                         mensaje = self._error_mysql_sin_secreto(exc, config_mysql.get('password'))
                         motivos.append(mensaje)
-                        incidencias.append({'referencia': referencia, 'mensaje': mensaje})
+                        prioritarias.append({'referencia': referencia, 'mensaje': mensaje})
                         self.log(f'[ERROR] Lote {lote_id}, {referencia}: {mensaje}')
                         try:
                             writer.insertar_log('ERROR', mensaje, id_ficha=id_ficha)
@@ -1859,18 +1866,23 @@ class MigracionApp:
                 raise ValueError('El número de fichas leídas no coincide con el alcance del lote.')
             if firma and self._firma_access(path_access) != firma:
                 raise ValueError('El respaldo cambió durante la ejecución. Revisa el lote antes de continuar.')
-            tiene_incidencias = bool(cont_err or incidencias)
+            tiene_incidencias = bool(prioritarias or incidencias)
             estado = 'con_incidencias' if tiene_incidencias else 'concluido'
             guardar_avance(
                 estado=estado, etapa='revision' if tiene_incidencias else 'finalizado',
-                evento=f'Ejecución terminada. Convertidas: {cont_ok}; omitidas: {cont_omitidos}; errores: {cont_err}.',
+                evento=f'Ejecución terminada. Convertidas: {cont_ok}. Omitidas: {cont_omitidos}. '
+                       f'Rechazadas: {cont_err}. Convertidas con bloqueo MARC: {bloqueos_marc}.',
             )
-            self.log(f'Lote {lote_id} finalizado. Convertidas: {cont_ok}, omitidas: {cont_omitidos}, errores: {cont_err}.')
+            self.log(f'Lote {lote_id} finalizado. Convertidas: {cont_ok}, omitidas: {cont_omitidos}, '
+                     f'rechazadas: {cont_err}, convertidas con bloqueo MARC: {bloqueos_marc}.')
             self._publicar_ui(self._finalizar_migracion)
-            self._publicar_ui(messagebox.showwarning if tiene_incidencias else messagebox.showinfo,
-                'Lote con incidencias' if tiene_incidencias else 'Lote concluido',
-                f'Convertidas: {cont_ok}\nYa existentes: {cont_omitidos}\nErrores: {cont_err}'
-                f'\nIncidencias: {total_incidencias}\nEjemplares: {cont_ejemplares}')
+            titulo = 'Lote concluido con advertencias' if tiene_incidencias else 'Lote concluido'
+            if cont_err or bloqueos_marc:
+                titulo = 'Lote con fichas por corregir'
+            self._publicar_ui(messagebox.showwarning if cont_err or bloqueos_marc else messagebox.showinfo, titulo,
+                f'Convertidas: {cont_ok:,}\nCon bloqueo MARC: {bloqueos_marc:,}\n'
+                f'Con solo advertencias: {con_advertencias:,}\n'
+                f'Ya existentes: {cont_omitidos:,}\nRechazadas al migrar: {cont_err:,}\nEjemplares: {cont_ejemplares:,}')
         except _DetencionSolicitada:
             try:
                 lote = self.historial_lotes.obtener(lote_id, resumen=True)
@@ -1884,7 +1896,7 @@ class MigracionApp:
                 self._publicar_ui(messagebox.showerror, 'No se pudo guardar la detención', str(exc))
         except Exception as exc:
             mensaje = self._error_mysql_sin_secreto(exc, config_mysql.get('password'))
-            incidencias.append({'referencia': 'Ejecución', 'mensaje': mensaje})
+            prioritarias.append({'referencia': 'Ejecución', 'mensaje': mensaje})
             try:
                 guardar_avance(estado='con_incidencias', evento='Ejecución interrumpida. Revisa las incidencias.')
             except (OSError, ValueError) as error_historial:
@@ -1907,9 +1919,7 @@ class MigracionApp:
             ficha, ejemplares, branch_mapping=branch_mapping, status_mapping=status_mapping,
             incidencias=incidencias,
         )
-        calidad = validar_ficha(record, getattr(self, 'framework_migracion', {}))
-        avisos = [(item['referencia'], item['mensaje']) for item in incidencias]
-        avisos.extend((i.campo + ('$' + i.subcampo if i.subcampo else ''), i.texto()) for i in calidad)
+        perfil = getattr(self, 'framework_migracion', {})
         try:
             xml = self.marc_converter.record_a_marcxml(record)
             iso = self.marc_converter.record_a_iso2709(record)
@@ -1917,17 +1927,26 @@ class MigracionApp:
             # El original de Access sigue intacto. Se pueden editar incluso campos
             # cuyo tamaño o texto impide representar la ficha en ISO2709 o XML.
             id_registro = writer.insertar_borrador(id_ficha, record.as_json())
-            avisos.append(('MARC21', f'Error de estructura. Borrador disponible para corregir: {exc}'))
+            calidad = validar_ficha(record, perfil)
+            calidad.append(Incidencia(ERROR_MARC, 'MARC21', f'Borrador disponible para corregir: {exc}'))
         else:
+            _, calidad = inspeccionar_copias(xml, iso, perfil)
             id_registro = writer.insertar_registro_marc(id_ficha, str(id_ficha), xml, iso)
+        avisos = [(item['referencia'], item['mensaje'], False) for item in incidencias]
+        explicadas = {item['codigo'] for item in incidencias if item.get('codigo')}
+        for i in calidad:
+            bloquea = i.gravedad == ERROR_MARC
+            if bloquea or i.codigo not in explicadas:
+                campo = i.campo + ('$' + i.subcampo if i.subcampo else '')
+                avisos.append((campo, i.texto(), bloquea))
         for ejemplar in ejemplares:
             biblioteca = ejemplar.get('Biblioteca')
             codigo = str(biblioteca).strip() if biblioteca is not None else ''
             sucursal = branch_mapping.get(codigo) if codigo else None
-            if not sucursal and not any(campo in ('952$a', '952$b') for campo, _ in avisos):
+            if not sucursal and not any(campo in ('952$a', '952$b') for campo, _, _ in avisos):
                 mensaje = (f'No contemplado: Biblioteca={codigo!r} sin correspondencia Koha.'
                            if codigo else 'Faltante: Biblioteca no tiene valor.')
-                avisos.append(('Biblioteca', mensaje))
+                avisos.append(('Biblioteca', mensaje, False))
             writer.insertar_ejemplar(
                 id_registro, id_ficha, ejemplar, sucursal, signatura=ficha.get('Clasificacion'),
             )
@@ -1944,7 +1963,9 @@ class MigracionApp:
         if lote.estado == 'en_proceso' and self._detencion_solicitada.is_set():
             estado = 'Deteniendo al terminar la ficha u operación en curso…'
         self.lbl_estado.config(text=f'{lote.id}: {lote.procesados}/{lote.total_objetivo} · {estado}')
-        self.lbl_stats.config(text=f'Convertidas: {lote.correctos} | Omitidas: {lote.omitidos} | Rechazadas: {lote.errores} | Incidencias recientes: {len(lote.incidencias)} | Ejemplares: {lote.ejemplares}')
+        bloqueos = 'Sin conteo' if lote.bloqueos_marc is None else str(lote.bloqueos_marc)
+        self.lbl_stats.config(text=f'Convertidas: {lote.correctos} | Omitidas: {lote.omitidos} | '
+                                   f'Rechazadas: {lote.errores} | Con bloqueo MARC al migrar: {bloqueos} | Ejemplares: {lote.ejemplares}')
         self._actualizar_panel()
 
     def _finalizar_migracion(self):

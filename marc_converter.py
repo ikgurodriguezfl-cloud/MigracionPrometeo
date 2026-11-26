@@ -13,7 +13,7 @@ from pymarc import (
     Field, MARCReader, Record, Subfield, XMLWriter, parse_xml_to_array,
 )
 
-from validacion_marc import isbn_valido, normalizar_posiciones_libro
+from validacion_marc import fuente_catalogacion_008, isbn_valido, normalizar_posiciones_libro
 from access_reader import formatear_fecha_marc, parsear_etiquetas_marc
 
 
@@ -125,11 +125,12 @@ class MarcConverter:
         return texto or None
 
     @staticmethod
-    def _incidencia(incidencias, regla, tipo, detalle):
+    def _incidencia(incidencias, regla, tipo, detalle, codigo=''):
         if incidencias is not None:
             incidencias.append({
                 'referencia': regla,
                 'mensaje': f'{tipo}: {detalle}',
+                'codigo': codigo,
             })
 
     def _valor_fuente(self, nombre, datos, descriptor, regla, incidencias):
@@ -378,14 +379,20 @@ class MarcConverter:
             campos[35:38] = list(idioma)
             if idiomas and idioma not in ('mul', 'und') and idioma != idiomas[0]:
                 self._incidencia(incidencias, '041', 'Ambiguo',
-                                 'Los idiomas de DatosFijos y EtiquetasMARC no coinciden; se conservaron para revisión.')
+                                 'Los idiomas de DatosFijos y EtiquetasMARC no coinciden; se conservaron para revisión.', '041-idioma')
+        fuente = fuente_catalogacion_008(campos[39])
+        if fuente == '|' and campos[39] != '|':
+            self._incidencia(incidencias, '008', 'Ambiguo',
+                             f'Fuente de catalogación {campos[39]!r} sin equivalencia en 008/39. '
+                             'Se usó | y se conservó el original en 887.')
+        campos[39] = fuente
         leader = self.mapping['record']['leader']
         if leader[6] in 'at' and leader[7] in 'acdm':
             cambios = normalizar_posiciones_libro(campos)
             if cambios:
                 self._incidencia(incidencias, '008', 'Ambiguo',
                                  'Posiciones incompatibles con libros: ' + ', '.join(cambios)
-                                 + '. Se marcaron sin codificar (|); el original se conserva en 887.')
+                                 + '. Se marcaron sin codificar (|); el original se conserva en 887.', '008-material')
         return ''.join(campos)
 
     def _idiomas_access(self, contenido):
@@ -557,7 +564,7 @@ class MarcConverter:
             for isbn in campo.get_subfields('a'):
                 if not isbn_valido(isbn):
                     self._incidencia(incidencias, '020$a', 'Ambiguo',
-                                     f'ISBN con formato o dígito verificador dudoso: {isbn}.')
+                                     f'ISBN con formato o dígito verificador dudoso: {isbn}.', 'isbn:' + isbn)
         return record
 
     def record_a_marcxml(self, record: Record) -> str:
