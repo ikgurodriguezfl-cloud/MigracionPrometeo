@@ -492,8 +492,13 @@ class PanelLotes(ttk.Frame):
     def __init__(self, parent, listar, politica, iniciar, exportar, revisar,
                  proponer, listar_propuestas, resolver_propuesta,
                  listar_observaciones, registrar_observacion,
-                 conexiones, detener, reprocesar, obtener, publicar, framework=None):
+                 conexiones, detener, reprocesar, obtener, publicar, framework=None,
+                 get_colores=None):
         super().__init__(parent, padding=24, style='Panel.TFrame')
+        self.get_colores = get_colores or (lambda: {
+            'acento': PRIMARIO, 'fondo': FONDO,
+            'superficie': SUPERFICIE, 'boton': SUPERFICIE_ALT,
+        })
         self.framework = framework or dict
         self.listar = listar
         self.obtener = obtener
@@ -1067,18 +1072,36 @@ class PanelLotes(ttk.Frame):
             raise ValueError(f'Vista de panel no reconocida: {clave}')
         self._vista_actual = clave
         self._vistas_contenido[clave].tkraise()
+        colores = self.get_colores()
+        fondo_inactivo = colores.get('fondo', FONDO)
+        fondo_activo = colores.get('superficie', SUPERFICIE)
+        fondo_hover = colores.get('boton', SUPERFICIE_ALT)
+        color_activo = colores.get('acento', PRIMARIO)
         for nombre, (boton, indicador, simbolo) in self._vistas_botones.items():
             seleccionada = nombre == clave
-            fondo = SUPERFICIE if seleccionada else FONDO
-            color = PRIMARIO if seleccionada else TEXTO_SECUNDARIO
+            fondo = fondo_activo if seleccionada else fondo_inactivo
+            color = color_activo if seleccionada else self._contraste_superficie(fondo)
             boton.configure(
                 bg=fondo, fg=color,
+                activebackground=color_activo if not seleccionada else fondo_hover,
+                activeforeground=TEXTO_INVERSO if not seleccionada else color_activo,
                 font=(FUENTE, TAM_CAMPO_ETIQUETA,
                       'bold' if seleccionada else 'normal'),
             )
             boton.master.configure(bg=fondo)
-            indicador.configure(bg=PRIMARIO if seleccionada else FONDO)
+            indicador.configure(bg=color_activo if seleccionada else fondo_inactivo)
             colorear_icono(simbolo, color, fondo)
+
+    @staticmethod
+    def _contraste_superficie(color):
+        try:
+            canales = [int(color[indice:indice + 2], 16) / 255 for indice in (1, 3, 5)]
+            luminancia = sum(peso * (canal / 12.92 if canal <= .04045 else
+                              ((canal + .055) / 1.055) ** 2.4)
+                             for peso, canal in zip((.2126, .7152, .0722), canales))
+            return TEXTO_INVERSO if luminancia < .42 else TEXTO
+        except (TypeError, ValueError):
+            return TEXTO
 
     def _cambiar_modo(self):
         self.seleccionado = None
@@ -1172,6 +1195,11 @@ class PanelLotes(ttk.Frame):
     def _pintar_grafico(self):
         if not hasattr(self, 'grafico'):
             return
+        colores_usuario = self.get_colores()
+        fondo_grafico = colores_usuario.get('superficie', SUPERFICIE)
+        fondo_barra = colores_usuario.get('boton', SUPERFICIE_ALT)
+        color_texto = self._contraste_superficie(fondo_grafico)
+        self.grafico.configure(background=fondo_grafico)
         self.grafico.delete('all')
         tipo = self.tipo_grafico.get()
         titulo, etiquetas, valores, colores = datos_grafico(
@@ -1183,7 +1211,7 @@ class PanelLotes(ttk.Frame):
         if not etiquetas:
             self.grafico.create_text(
                 ancho / 2, alto / 2, text='No hay datos para mostrar.',
-                fill=TEXTO_SECUNDARIO, font=('Segoe UI', 11), anchor='center',
+                fill=color_texto, font=('Segoe UI', 11), anchor='center',
             )
             return
         maximo = max(valores, default=0) or 1
@@ -1194,12 +1222,12 @@ class PanelLotes(ttk.Frame):
             y = 16 + indice * espacio
             self.grafico.create_text(
                 margen_izquierdo - 12, y + 9, text=etiqueta,
-                fill=TEXTO_SECUNDARIO, font=('Segoe UI', 9), anchor='e',
+                fill=color_texto, font=('Segoe UI', 9), anchor='e',
                 width=margen_izquierdo - 20,
             )
             self.grafico.create_rectangle(
                 margen_izquierdo, y, margen_izquierdo + ancho_barra, y + 18,
-                fill=SUPERFICIE_ALT, outline='',
+                fill=fondo_barra, outline='',
             )
             if valor:
                 self.grafico.create_rectangle(
@@ -1209,7 +1237,7 @@ class PanelLotes(ttk.Frame):
                 )
             self.grafico.create_text(
                 margen_izquierdo + ancho_barra + 10, y + 9,
-                text=f'{valor:,}', fill=color, font=('Segoe UI', 9, 'bold'),
+                text=f'{valor:,}', fill=color_texto, font=('Segoe UI', 9, 'bold'),
                 anchor='w',
             )
 

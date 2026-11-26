@@ -226,6 +226,100 @@ def instalar_estilos(raiz: tk.Tk) -> ttk.Style:
     return estilo
 
 
+def instalar_color_personalizado(estilo: ttk.Style, colores=None):
+    """Aplica las preferencias de color a los estilos compartidos de la app."""
+    colores = colores or {}
+    primario = colores.get('acento', PRIMARIO)
+    lateral = colores.get('lateral', BARRA_LATERAL)
+    fondo = colores.get('fondo', FONDO)
+    superficie = colores.get('superficie', SUPERFICIE)
+    boton = colores.get('boton', SUPERFICIE_ALT)
+    def contraste(color):
+        try:
+            canales = [int(color[indice:indice + 2], 16) / 255 for indice in (1, 3, 5)]
+            luminancia = sum(peso * (canal / 12.92 if canal <= .04045 else
+                              ((canal + .055) / 1.055) ** 2.4)
+                             for peso, canal in zip((.2126, .7152, .0722), canales))
+            return TEXTO_INVERSO if luminancia < .42 else TEXTO
+        except (TypeError, ValueError):
+            return TEXTO
+    texto_fondo = contraste(fondo)
+    texto_superficie = contraste(superficie)
+    for nombre in ('App.TFrame', 'Panel.TFrame', 'TFrame'):
+        estilo.configure(nombre, background=fondo)
+    estilo.configure('Tarjeta.TFrame', background=superficie)
+    for nombre in ('TLabel', 'AppTitle.TLabel', 'PageTitle.TLabel',
+                   'PageSubtitle.TLabel', 'Titulo.Panel.TLabel', 'Panel.TLabel'):
+        estilo.configure(nombre, background=fondo, foreground=texto_fondo)
+    for nombre in ('Tarjeta.TLabel', 'CardBody.TLabel', 'CardHint.TLabel',
+                   'CardTitle.TLabel', 'CardMetric.TLabel', 'Field.TLabel',
+                   'Nombre.TLabel', 'Numero.TLabel', 'Estado.TLabel',
+                   'HeroTitle.TLabel', 'HeroHint.TLabel', 'TLabelframe.Label'):
+        estilo.configure(nombre, background=superficie, foreground=texto_superficie)
+    for nombre in ('HeroUser.TLabel', 'HeroMeta.TLabel', 'HeroRole.TLabel'):
+        estilo.configure(nombre, background=lateral, foreground=contraste(lateral))
+    for nombre in ('TEntry', 'TCombobox'):
+        estilo.configure(nombre, fieldbackground=superficie, foreground=texto_superficie,
+                         background=superficie)
+    estilo.configure('TCheckbutton', background=fondo, foreground=texto_fondo)
+    estilo.configure('TLabelframe', background=superficie)
+    estilo.configure('TNotebook', background=fondo)
+    estilo.configure('TNotebook.Tab', background=superficie, foreground=texto_superficie)
+    estilo.map('TNotebook.Tab', background=[('selected', superficie), ('active', superficie)],
+               foreground=[('selected', texto_superficie), ('active', texto_superficie)])
+    estilo.configure('Revision.TNotebook', background=superficie)
+    estilo.configure('Revision.TNotebook.Tab', background=superficie, foreground=texto_superficie)
+    estilo.map('Revision.TNotebook.Tab',
+               background=[('selected', superficie), ('active', superficie)],
+               foreground=[('selected', primario), ('active', primario)])
+    estilo.configure('TButton', background=boton, foreground=contraste(boton),
+                     bordercolor=boton)
+    estilo.map('TButton', background=[('active', primario), ('pressed', primario),
+                                      ('disabled', boton)],
+               foreground=[('active', contraste(primario)), ('pressed', contraste(primario)),
+                           ('disabled', contraste(boton))])
+    estilo.configure('Quiet.TButton', background=boton, foreground=contraste(boton))
+    estilo.map('Quiet.TButton', background=[('active', primario), ('pressed', primario)],
+               foreground=[('active', contraste(primario)), ('pressed', contraste(primario))])
+    estilo.configure('HeroQuiet.TButton', background=boton, foreground=contraste(boton))
+    estilo.map('HeroQuiet.TButton', background=[('active', primario), ('pressed', primario)],
+               foreground=[('active', contraste(primario)), ('pressed', contraste(primario))])
+    estilo.configure('Secondary.TButton', background=boton, foreground=contraste(boton),
+                     bordercolor=boton)
+    estilo.map('Secondary.TButton', background=[('active', primario), ('pressed', primario)],
+               foreground=[('active', contraste(primario)), ('pressed', contraste(primario))])
+    estilo.configure('RevisionAction.TButton', background=boton, foreground=contraste(boton))
+    estilo.map('RevisionAction.TButton', background=[('active', primario), ('disabled', boton)],
+               foreground=[('active', contraste(primario)), ('disabled', contraste(boton))])
+    estilo.configure('Lotes.Treeview.Heading', background=superficie,
+                     foreground=texto_superficie)
+    estilo.configure('DemoNotice.TLabel', background=superficie, foreground=texto_superficie)
+    estilo.configure('Lotes.Treeview', foreground=texto_superficie)
+    estilo.configure('Tarjeta.TFrame', background=superficie)
+    estilo.configure('App.TFrame', background=fondo)
+    estilo.configure('TSeparator', background=superficie)
+    estilo.configure('Horizontal.TProgressbar', troughcolor=superficie, background=primario)
+    estilo.configure('Lotes.Horizontal.TProgressbar', troughcolor=superficie, background=primario)
+    estilo.configure('Hero.Horizontal.TProgressbar', troughcolor=lateral, background=primario)
+    estilo.configure('Primary.TButton', background=primario, foreground=contraste(primario),
+                     bordercolor=primario)
+    estilo.map('Primary.TButton', background=[('active', primario), ('pressed', primario)],
+               foreground=[('active', contraste(primario)), ('pressed', contraste(primario))])
+    estilo.configure('Secondary.TButton', foreground=contraste(boton))
+    estilo.map('Secondary.TButton', foreground=[('active', contraste(primario)),
+                                                 ('pressed', contraste(primario))])
+    estilo.configure('CardMetric.TLabel', foreground=primario)
+    estilo.configure('Numero.TLabel', foreground=primario)
+    estilo.configure('Estado.TLabel', foreground=primario)
+    estilo.configure('Horizontal.TProgressbar', background=primario)
+    estilo.configure('Lotes.Horizontal.TProgressbar', background=primario)
+    estilo.map('Lotes.Treeview',
+               background=[('selected', primario)],
+               foreground=[('selected', contraste(primario))])
+    estilo.configure('Nav.TButton', background=lateral, foreground=contraste(lateral))
+    estilo.configure('NavActive.TButton', background=lateral, foreground=contraste(lateral))
+
+
 # ---------------------------------------------------------------------------
 # Componentes de ayuda
 # ---------------------------------------------------------------------------
@@ -348,6 +442,7 @@ def crear_icono(parent, nombre, color=TEXTO_SECUNDARIO, size=20, fondo=None):
 
 def colorear_icono(lienzo, color, fondo=None):
     fondo = fondo or lienzo.cget('background')
+    lienzo._color_icono_paleta = color
     lienzo.configure(background=fondo)
     lienzo.itemconfigure('trazo', fill=color)
     lienzo.itemconfigure('contorno', outline=color)

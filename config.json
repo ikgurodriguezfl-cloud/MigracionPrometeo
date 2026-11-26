@@ -23,5 +23,21 @@
   "item_type_bib": "LIBR0",
   "item_type_item": "LIBR0",
   "homebranch": "ITT",
-  "holdingbranch": "ITT"
+  "holdingbranch": "ITT",
+  "apariencias": {
+    "admin": {
+      "acento": "#e0a638",
+      "lateral": "#24c6a2",
+      "fondo": "#b7d7d9",
+      "superficie": "#4f8dae",
+      "boton": "#5375ac"
+    },
+    "iker_rev": {
+      "acento": "#0a7016",
+      "lateral": "#215309",
+      "fondo": "#effaf9",
+      "superficie": "#ec7578",
+      "boton": "#e0dc27"
+    }
+  }
 }

@@ -19,6 +19,8 @@ def main():
         auth_service.ensure_admin(admin_password)
 
     def mostrar_login():
+        # Ningún refresco de la sesión anterior debe alterar la pantalla de acceso.
+        root.unbind_all('<Map>')
         # Limpiar todos los widgets de la ventana actual
         for widget in root.winfo_children():
             widget.destroy()
@@ -34,6 +36,7 @@ def main():
     def ir_a_principal(session_token=None):
         # El atajo del login no debe reiniciar la aplicación al usar el panel.
         root.unbind('<Return>')
+        root.unbind_all('<Map>')
         # Limpiar todos los widgets de la ventana actual
         for widget in root.winfo_children():
             widget.destroy()

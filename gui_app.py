@@ -1,6 +1,6 @@
 """Interfaz grafica de la migracion Prometeo Access -> MySQL MARC21 -> Koha."""
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog, messagebox, simpledialog, colorchooser
 from pymysql.err import OperationalError
 import json
 import os
@@ -37,6 +37,7 @@ from ui_kit import (
     TAM_TABLA_ENCABEZADO, TAM_TABLA_CUERPO, TAM_METRICA_VALOR, TAM_METRICA_ETIQUETA,
     ESPACIO_XS, ESPACIO_S, ESPACIO_M, ESPACIO_L, ESPACIO_XL,
     instalar_estilos, tarjeta, seccion_tarjeta, campo_formulario,
+    instalar_color_personalizado,
     encabezado_pagina, boton_accion, badge_estado, mensaje_estado, separador,
     animar_valor, crear_icono, colorear_icono,
     COLORES_ESTADO_LOTE,
@@ -80,6 +81,7 @@ class MigracionApp:
             self.auth_service.get_username(self.session_token)
             if self.auth_service else "Usuario"
         )
+        self.COLORES = dict(type(self).COLORES)
         
         self.root.title(
             f'NexoMARC | Migración Access a MARC21 (Koha) · '
@@ -89,10 +91,27 @@ class MigracionApp:
         alto = min(940, self.root.winfo_screenheight() - 72)
         self.root.geometry(f'{ancho}x{alto}')
         self.root.minsize(min(1040, ancho), min(680, alto))
+        self.root.state('zoomed')
         self.root.configure(background=self.COLORES['fondo'])
 
         self.config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
         self.config = self.cargar_config()
+        apariencias = self.config.get('apariencias', {})
+        preferencia_usuario = (apariencias.get(self.usuario_nombre, {})
+                               if isinstance(apariencias, dict) else {})
+        self.colores_usuario = self._colores_usuario_validos(
+            preferencia_usuario)
+        self.COLORES.update({
+            'fondo': self.colores_usuario['fondo'],
+            'superficie': self.colores_usuario['superficie'],
+            'guinda': self.colores_usuario['acento'],
+            'guinda_hover': self.colores_usuario['acento'],
+            'guinda_suave': PRIMARIO_SUAVE,
+            'barra_lateral': self.colores_usuario['lateral'],
+            'barra_lateral_hover': self.colores_usuario['lateral'],
+            'barra_lateral_activa': self.colores_usuario['lateral'],
+        })
+        self.root.configure(background=self.COLORES['fondo'])
         self.ediciones_dewey = {'Sin confirmar': '', 'Completa': '0', 'Abreviada': '1'}
         self.ruta_framework = self.config.get("framework_koha_csv", "")
         self._exportando = False
@@ -132,6 +151,8 @@ class MigracionApp:
         self._cerrando = False
 
         self._crear_interfaz()
+        self._aplicar_apariencia()
+        self.root.bind_all('<Map>', self._programar_refresco_apariencia, add='+')
         self._cargar_config_en_ui()
         self._actualizar_panel()
         self._procesar_eventos_ui()
@@ -201,6 +222,7 @@ class MigracionApp:
         self.frame_migracion = ttk.Frame(self.page_container, style='App.TFrame')
         self.frame_log = ttk.Frame(self.page_container, style='App.TFrame')
         self.frame_usuarios = ttk.Frame(self.page_container, style='App.TFrame')
+        self.frame_apariencia = ttk.Frame(self.page_container, style='App.TFrame')
         self.frame_koha = VistaResultadosKoha(
             self.page_container,
             get_mysql_config=lambda: {
@@ -232,6 +254,7 @@ class MigracionApp:
             conexiones=self._preparar_nueva_migracion,
             detener=self._solicitar_detencion,
             reprocesar=self._reprocesar_desde_panel,
+            get_colores=lambda: self.colores_usuario,
         )
         self.paginas = (
             self.panel_lotes,
@@ -241,6 +264,7 @@ class MigracionApp:
             self.frame_koha,
             self.frame_log,
             self.frame_usuarios,
+            self.frame_apariencia,
         )
         for pagina in self.paginas:
             pagina.grid(row=0, column=0, sticky='nsew')
@@ -255,6 +279,7 @@ class MigracionApp:
         self._crear_boton_navegacion(self.nav_container, 'Actividad', self.frame_log)
         if tiene_permiso(self.perfil_usuario, 'gestionar_usuarios'):
             self._crear_boton_navegacion(self.nav_container, 'Usuarios', self.frame_usuarios)
+        self._crear_boton_navegacion(self.nav_container, 'Apariencia', self.frame_apariencia)
         self._crear_boton_navegacion(self.nav_container, 'Resultados Koha', self.frame_koha, icono='check')
 
         self._crear_pestana_conexion()
@@ -262,6 +287,7 @@ class MigracionApp:
         self._crear_pestana_config()
         self._crear_pestana_log()
         self._crear_pestana_usuarios()
+        self._crear_pestana_apariencia()
         for variable in (self.entry_host, self.entry_port, self.entry_user, self.entry_pass, self.entry_db):
             variable.trace_add('write', self._cambio_configuracion_mysql)
         self.pagina_actual = self.panel_lotes
@@ -282,6 +308,7 @@ class MigracionApp:
             'Migración': 'play',
             'Actividad': 'activity',
             'Usuarios': 'users',
+            'Apariencia': 'settings',
         }.get(texto, 'file')
         simbolo = crear_icono(
             elemento, icono, color='#a8b0c2',
@@ -294,7 +321,7 @@ class MigracionApp:
             anchor='w', padx=5, pady=7, bd=0, relief='flat',
             cursor='hand2', font=(FUENTE, TAM_CAMPO_ETIQUETA, 'bold'),
             bg=NOCHE, fg='#d2d7e2',
-            activebackground=NOCHE_ALT,
+            activebackground=self.COLORES['barra_lateral_hover'],
             activeforeground=TEXTO_INVERSO, disabledforeground='#687287',
             highlightthickness=0,
         )
@@ -302,13 +329,13 @@ class MigracionApp:
         boton.bind(
             '<Enter>',
             lambda _evento: boton.configure(
-                bg=NOCHE_ALT,
+                bg=self.COLORES['barra_lateral_hover'],
             ) if boton['state'] == 'normal' else None,
         )
         simbolo.bind(
             '<Enter>',
             lambda _evento: boton.configure(
-                bg=NOCHE_ALT,
+                bg=self.COLORES['barra_lateral_hover'],
             ) if boton['state'] == 'normal' else None,
         )
         boton.bind(
@@ -465,13 +492,31 @@ class MigracionApp:
             self.frame_koha.sincronizar_lote_activo()
         self.pagina_actual = pantalla
         pantalla.tkraise()
+        self._aplicar_apariencia()
         self._actualizar_navegacion_secuencial()
+
+    def _programar_refresco_apariencia(self, _evento=None):
+        if getattr(self, '_refresco_apariencia_pendiente', False):
+            return
+        self._refresco_apariencia_pendiente = True
+
+        def refrescar():
+            self._refresco_apariencia_after_id = None
+            self._refresco_apariencia_pendiente = False
+            if not getattr(self, '_cerrando', False):
+                self._aplicar_apariencia()
+
+        self._refresco_apariencia_after_id = self.root.after_idle(refrescar)
 
     def _pagina_autorizada(self, pantalla):
         if pantalla in (self.panel_lotes, self.frame_koha):
          return self.perfil_usuario in (
            'Ejecucion', 'Revision', 'Aprobacion', 'Administracion',
                   )
+        if pantalla is self.frame_apariencia:
+            return self.perfil_usuario in (
+                'Ejecucion', 'Revision', 'Aprobacion', 'Administracion',
+            )
         
         permiso_por_pagina = {
             self.frame_conexion: 'validar_access',
@@ -524,6 +569,7 @@ class MigracionApp:
             ),
             self.frame_log: self._pagina_autorizada(self.frame_log),
             self.frame_usuarios: self._pagina_autorizada(self.frame_usuarios),
+            self.frame_apariencia: self._pagina_autorizada(self.frame_apariencia),
             self.frame_koha: self._pagina_autorizada(self.frame_koha),
         }
         if not disponible.get(actual, False):
@@ -540,7 +586,7 @@ class MigracionApp:
         for pantalla, boton in self._nav_items.items():
             seleccionada = pantalla == actual
             habilitado = disponible.get(pantalla, False)
-            fondo = BARRA_LATERAL_ACTIVA if seleccionada else NOCHE
+            fondo = self.COLORES['barra_lateral_activa'] if seleccionada else self.COLORES['barra_lateral']
             color = (
                 TEXTO_INVERSO if seleccionada else
                 '#d2d7e2' if habilitado else '#687287'
@@ -553,7 +599,7 @@ class MigracionApp:
             )
             boton.master.configure(background=fondo)
             self._nav_indicadores[pantalla].configure(
-                bg=PRIMARIO_HOVER if seleccionada else NOCHE,
+                bg=self.COLORES['guinda_hover'] if seleccionada else self.COLORES['barra_lateral'],
             )
             colorear_icono(self._nav_iconos[pantalla], color, fondo)
         if hasattr(self, 'btn_siguiente_config'):
@@ -852,7 +898,7 @@ class MigracionApp:
         self._mostrar_framework()
         ttk.Label(fila_perfil, text='Edición Dewey de la fuente', style='CardHint.TLabel').pack(side='left', padx=12)
         self.edicion_dewey = tk.StringVar(value=next(
-            (nombre for nombre, codigo in self.ediciones_dewey.items() if codigo == self.config.get('edicion_dewey')), 'Sin confirmar'))
+            (nombre for nombre, codigo in self.ediciones_dewey.items() if codigo == self.config.get('edicion_dewey')), 'Completa'))
         selector = ttk.Combobox(fila_perfil, textvariable=self.edicion_dewey, values=list(self.ediciones_dewey), state='readonly', width=14)
         selector.pack(side='left')
         selector.bind('<<ComboboxSelected>>', self._configuracion_modificada)
@@ -873,6 +919,35 @@ class MigracionApp:
             command=self._continuar_a_migracion, state='disabled',
         )
         self.btn_siguiente_migracion.pack(side='right')
+
+    def _crear_pestana_apariencia(self):
+        f = self.frame_apariencia
+        f.configure(padding=(ESPACIO_L, ESPACIO_M, ESPACIO_L, ESPACIO_XL))
+        self._encabezado_pagina(
+            f, 'Personaliza tu interfaz',
+            'Elige los colores de énfasis y navegación. Tus preferencias se guardan para esta cuenta en este equipo.',
+            icono='settings',
+        )
+        apariencia = seccion_tarjeta(f, 'PALETA DE LA INTERFAZ')
+        apariencia.pack(fill='x', pady=(ESPACIO_M, 0))
+        ttk.Label(apariencia, text='Personaliza acentos y superficies. Los cambios se aplican y guardan automáticamente.',
+                  style='CardHint.TLabel').pack(anchor='w', pady=(0, ESPACIO_S))
+        fila_colores = ttk.Frame(apariencia, style='Tarjeta.TFrame')
+        fila_colores.pack(fill='x')
+        self.muestras_colores = {}
+        etiquetas_colores = {
+            'acento': 'Principal', 'lateral': 'Navegación',
+            'fondo': 'Fondo', 'superficie': 'Tarjetas', 'boton': 'Botones',
+        }
+        for nombre, etiqueta in etiquetas_colores.items():
+            muestra = tk.Label(fila_colores, text='   ', width=2,
+                               bg=self.colores_usuario[nombre])
+            muestra.pack(side='left', padx=(ESPACIO_M if nombre != 'acento' else 0, ESPACIO_XS))
+            self.muestras_colores[nombre] = muestra
+            ttk.Button(fila_colores, text=etiqueta,
+                       command=lambda n=nombre: self._elegir_color(n)).pack(side='left')
+        ttk.Button(fila_colores, text='Restablecer',
+                   command=self._restablecer_apariencia).pack(side='right')
 
     def _crear_pestana_log(self):
         f = self.frame_log
@@ -909,6 +984,229 @@ class MigracionApp:
             except Exception:
                 return {}
         return {}
+
+    @staticmethod
+    def _colores_usuario_validos(apariencia):
+        if not isinstance(apariencia, dict):
+            apariencia = {}
+        valores = {
+            'acento': apariencia.get('acento', PRIMARIO),
+            'lateral': apariencia.get('lateral', BARRA_LATERAL),
+            'fondo': apariencia.get('fondo', FONDO),
+            'superficie': apariencia.get('superficie', SUPERFICIE),
+            'boton': apariencia.get('boton', SUPERFICIE_ALT),
+        }
+        return {nombre: (valor if isinstance(valor, str) and len(valor) == 7
+                         and valor.startswith('#')
+                         and all(c in '0123456789abcdefABCDEF' for c in valor[1:])
+                         else defecto)
+                for (nombre, valor), defecto in zip(
+                    valores.items(), (PRIMARIO, BARRA_LATERAL, FONDO, SUPERFICIE, SUPERFICIE_ALT))}
+
+    def _aplicar_apariencia(self):
+        acento = self.colores_usuario['acento']
+        lateral = self.colores_usuario['lateral']
+        self.COLORES.update({
+            'guinda': acento, 'guinda_hover': acento,
+            'barra_lateral': lateral, 'barra_lateral_hover': lateral,
+            'barra_lateral_activa': lateral,
+            'fondo': self.colores_usuario['fondo'],
+            'superficie': self.colores_usuario['superficie'],
+        })
+        instalar_color_personalizado(ttk.Style(self.root), self.colores_usuario)
+        self.root.configure(background=self.colores_usuario['fondo'])
+        reemplazos = {
+            PRIMARIO: acento, PRIMARIO_HOVER: acento, PRIMARIO_ACTIVO: acento,
+            SUPERFICIE_ALT: self.colores_usuario['superficie'],
+            BARRA_LATERAL: lateral, BARRA_LATERAL_HOVER: lateral,
+            BARRA_LATERAL_ACTIVA: lateral,
+            NOCHE: lateral, NOCHE_ALT: lateral, NOCHE_BORDE: lateral,
+            FONDO: self.colores_usuario['fondo'],
+            SUPERFICIE: self.colores_usuario['superficie'],
+            '#fbfaf9': self.colores_usuario['superficie'],
+        }
+        anterior = getattr(self, '_apariencia_aplicada', {})
+        if anterior.get('acento'):
+            reemplazos[anterior['acento']] = acento
+        if anterior.get('lateral'):
+            reemplazos[anterior['lateral']] = lateral
+        if anterior.get('fondo'):
+            reemplazos[anterior['fondo']] = self.colores_usuario['fondo']
+        if anterior.get('superficie'):
+            reemplazos[anterior['superficie']] = self.colores_usuario['superficie']
+        self._sincronizar_superficies(self.root, self.colores_usuario['fondo'], reemplazos)
+        if hasattr(self, 'muestras_colores'):
+            for nombre, muestra in self.muestras_colores.items():
+                muestra.configure(bg=self.colores_usuario[nombre])
+        self._apariencia_aplicada = dict(self.colores_usuario)
+
+    def _sincronizar_superficies(self, widget, fondo_padre, reemplazos):
+        """Propaga fondos por los contenedores para todas las pestañas y subpestañas."""
+        estilo = ttk.Style(self.root)
+        fondo_actual = fondo_padre
+        if isinstance(widget, ttk.Label):
+            self._alinear_label_con_contenedor(widget, fondo_padre)
+        elif isinstance(widget, ttk.Treeview):
+            base = getattr(widget, '_estilo_base_paleta', None)
+            if base is None:
+                base = widget.cget('style') or 'Treeview'
+                widget._estilo_base_paleta = base
+            superficie = self.colores_usuario['superficie']
+            texto = self._texto_contraste(superficie)
+            primario = self.colores_usuario['acento']
+            opciones = dict(estilo.configure(base) or {})
+            opciones.update(background=superficie, fieldbackground=superficie,
+                            foreground=texto)
+            estilo_personalizado = f'PaletaTabla{widget.winfo_id():x}.Treeview'
+            estilo.configure(estilo_personalizado, **opciones)
+            estilo.map(estilo_personalizado,
+                       background=[('selected', primario)],
+                       foreground=[('selected', self._texto_contraste(primario))])
+            estilo.configure(f'{estilo_personalizado}.Heading',
+                             background=self.colores_usuario['boton'],
+                             foreground=self._texto_contraste(self.colores_usuario['boton']))
+            widget.configure(style=estilo_personalizado)
+        elif isinstance(widget, (ttk.Frame, ttk.LabelFrame)):
+            base = getattr(widget, '_estilo_base_paleta', None)
+            if base is None:
+                base = widget.cget('style') or widget.winfo_class()
+                widget._estilo_base_paleta = base
+            opciones = dict(estilo.configure(base) or {})
+            fondo = estilo.lookup(base, 'background')
+            fondo = reemplazos.get(fondo, fondo)
+            if base in ('TFrame', 'Frame', 'TLabelframe', 'LabelFrame') or not fondo:
+                fondo = fondo_padre
+            opciones['background'] = fondo
+            estilo_personalizado = f'PaletaFrame{widget.winfo_id():x}.{widget.winfo_class()}'
+            estilo.configure(estilo_personalizado, **opciones)
+            widget.configure(style=estilo_personalizado)
+            fondo_actual = fondo
+        elif isinstance(widget, (tk.Frame, tk.LabelFrame, tk.Canvas)):
+            try:
+                actual = widget.cget('background')
+                fondo_actual = reemplazos.get(actual, fondo_padre)
+                widget.configure(background=fondo_actual)
+                if isinstance(widget, tk.Canvas) and hasattr(widget, 'icon_name'):
+                    color_icono = getattr(widget, '_color_icono_paleta', TEXTO_SECUNDARIO)
+                    color_icono = reemplazos.get(color_icono, color_icono)
+                    if color_icono in (TEXTO, TEXTO_SECUNDARIO, TEXTO_MUTADO, TEXTO_INVERSO):
+                        color_icono = self._texto_contraste(fondo_actual)
+                    colorear_icono(widget, color_icono, fondo_actual)
+            except tk.TclError:
+                fondo_actual = fondo_padre
+        elif isinstance(widget, tk.Text):
+            fondo_actual = self.colores_usuario['superficie']
+            widget.configure(
+                background=fondo_actual,
+                foreground=self._texto_contraste(fondo_actual),
+                insertbackground=self.colores_usuario['acento'],
+            )
+        elif isinstance(widget, (tk.Label, tk.Button)):
+            try:
+                actual = widget.cget('background')
+                fondo_actual = reemplazos.get(actual, actual or fondo_padre)
+                widget.configure(background=fondo_actual)
+                if isinstance(widget, tk.Label):
+                    widget.configure(foreground=self._texto_contraste(fondo_actual))
+                else:
+                    rol_boton = getattr(widget, '_rol_boton_apariencia', None)
+                    if rol_boton in ('acento', 'boton'):
+                        fondo_actual = self.colores_usuario[rol_boton]
+                        color_texto = self._texto_contraste(fondo_actual)
+                        widget.configure(background=fondo_actual, foreground=color_texto)
+                        color_activo = fondo_actual
+                        color_texto_activo = color_texto
+                    else:
+                        color_texto_actual = widget.cget('foreground')
+                        if color_texto_actual in (PRIMARIO, PRIMARIO_HOVER, PRIMARIO_ACTIVO):
+                            widget.configure(foreground=self.colores_usuario['acento'])
+                        elif color_texto_actual in (TEXTO, TEXTO_SECUNDARIO, TEXTO_MUTADO, TEXTO_INVERSO):
+                            widget.configure(foreground=self._texto_contraste(fondo_actual))
+                        color_activo = (self.colores_usuario['lateral']
+                                        if fondo_actual == self.colores_usuario['lateral']
+                                        else self.colores_usuario['superficie'])
+                        color_texto_activo = self._texto_contraste(color_activo)
+                    widget.configure(
+                        activebackground=color_activo,
+                        activeforeground=color_texto_activo,
+                    )
+            except tk.TclError:
+                fondo_actual = fondo_padre
+        for hijo in widget.winfo_children():
+            self._sincronizar_superficies(hijo, fondo_actual, reemplazos)
+
+    def _alinear_label_con_contenedor(self, etiqueta, fondo):
+        """Da a cada ttk.Label el fondo efectivo de su contenedor inmediato."""
+        estilo = ttk.Style(self.root)
+        base = getattr(etiqueta, '_estilo_base_paleta', None)
+        if base is None:
+            base = etiqueta.cget('style') or 'TLabel'
+            etiqueta._estilo_base_paleta = base
+        fondo = fondo or self.colores_usuario['fondo']
+        opciones = dict(estilo.configure(base) or {})
+        opciones['background'] = fondo
+        texto_base = getattr(etiqueta, '_color_texto_base_paleta', None)
+        if texto_base is None:
+            texto_base = etiqueta.cget('foreground') or estilo.lookup(base, 'foreground')
+            etiqueta._color_texto_base_paleta = texto_base
+        if texto_base in (TEXTO, TEXTO_SECUNDARIO, TEXTO_MUTADO, TEXTO_INVERSO):
+            opciones['foreground'] = self._texto_contraste(fondo)
+        elif texto_base in (PRIMARIO, PRIMARIO_HOVER, PRIMARIO_ACTIVO):
+            opciones['foreground'] = self.colores_usuario['acento']
+        estilo_personalizado = f'Paleta{etiqueta.winfo_id():x}.TLabel'
+        estilo.configure(estilo_personalizado, **opciones)
+        etiqueta.configure(
+            style=estilo_personalizado,
+            background=fondo,
+            foreground=opciones.get('foreground', texto_base),
+        )
+
+    @staticmethod
+    def _texto_contraste(color):
+        try:
+            canales = [int(color[indice:indice + 2], 16) / 255 for indice in (1, 3, 5)]
+            luminancia = sum(peso * (canal / 12.92 if canal <= .04045 else
+                              ((canal + .055) / 1.055) ** 2.4)
+                             for peso, canal in zip((.2126, .7152, .0722), canales))
+            return TEXTO_INVERSO if luminancia < .42 else TEXTO
+        except (TypeError, ValueError):
+            return TEXTO
+
+    def _guardar_apariencia(self):
+        apariencias = self.config.setdefault('apariencias', {})
+        if not isinstance(apariencias, dict):
+            apariencias = {}
+            self.config['apariencias'] = apariencias
+        apariencias[self.usuario_nombre] = dict(self.colores_usuario)
+        with open(self.config_path, 'w', encoding='utf-8') as archivo:
+            json.dump(self.config, archivo, indent=2, ensure_ascii=False)
+
+    def _elegir_color(self, nombre):
+        elegido = colorchooser.askcolor(color=self.colores_usuario[nombre],
+                                        title='Elige un color')[1]
+        if not elegido:
+            return
+        anterior = self.colores_usuario[nombre]
+        self.colores_usuario[nombre] = elegido
+        try:
+            self._guardar_apariencia()
+            self._aplicar_apariencia()
+        except OSError as exc:
+            self.colores_usuario[nombre] = anterior
+            messagebox.showerror('No se pudo guardar', str(exc))
+
+    def _restablecer_apariencia(self):
+        anteriores = self.colores_usuario
+        self.colores_usuario = {
+            'acento': PRIMARIO, 'lateral': BARRA_LATERAL,
+            'fondo': FONDO, 'superficie': SUPERFICIE, 'boton': SUPERFICIE_ALT,
+        }
+        try:
+            self._guardar_apariencia()
+            self._aplicar_apariencia()
+        except OSError as exc:
+            self.colores_usuario = anteriores
+            messagebox.showerror('No se pudo guardar', str(exc))
 
     def _cargar_config_en_ui(self):
         self.var_access_path.set(self.config.get('access', {}).get('path', ''))
@@ -976,6 +1274,7 @@ class MigracionApp:
             return
         # Recopila los valores visibles y los persiste como JSON.
         config = {
+            'apariencias': self.config.get('apariencias', {}),
             'access': {
                 'path': self.var_access_path.get(),
                 'driver': '{Microsoft Access Driver (*.mdb, *.accdb)}',
@@ -1241,9 +1540,21 @@ class MigracionApp:
         if self.migracion_en_curso:
             messagebox.showwarning('Migración en curso', 'Pulsa Detener migración y espera a que termine la operación en curso antes de cerrar.')
             return
-        self._cerrando = True
-        self.root.after_cancel(self._after_ui)
+        self._detener_tareas_de_sesion()
         self.root.destroy()
+
+    def _detener_tareas_de_sesion(self):
+        """Desconecta los refrescos y tareas de UI antes de cambiar de cuenta."""
+        self._cerrando = True
+        self.root.unbind_all('<Map>')
+        for nombre in ('_after_ui', '_refresco_apariencia_after_id'):
+            after_id = getattr(self, nombre, None)
+            if after_id:
+                try:
+                    self.root.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+                setattr(self, nombre, None)
 
     def _sesion_valida(self) -> bool:
         if not hasattr(self, 'auth_service') or self.auth_service is None:
@@ -1259,6 +1570,7 @@ class MigracionApp:
         if self.migracion_en_curso or self._exportando:
             self.cerrar()
             return
+        self._detener_tareas_de_sesion()
         if self.auth_service is not None:
             self.auth_service.logout(self.session_token)
         if self.on_logout is not None:
@@ -1390,19 +1702,37 @@ class MigracionApp:
 
         acciones = ttk.Frame(tarjeta_formulario, style='Tarjeta.TFrame')
         acciones.pack(fill='x', pady=(ESPACIO_L, 0))
-        ttk.Button(
-            acciones, text='Limpiar', style='Quiet.TButton',
-            command=lambda: (
-                entrada_usuario.delete(0, tk.END),
-                entrada_contrasena.delete(0, tk.END),
-                entrada_confirmacion.delete(0, tk.END),
-                self.lbl_usuario_estado.configure(text=''),
-            ),
-        ).pack(side='right', padx=(0, ESPACIO_S))
-        ttk.Button(
-            acciones, text='Crear usuario', style='Primary.TButton',
-            command=registrar,
-        ).pack(side='right')
+
+        def limpiar_formulario():
+            entrada_usuario.delete(0, tk.END)
+            entrada_contrasena.delete(0, tk.END)
+            entrada_confirmacion.delete(0, tk.END)
+            self.lbl_usuario_estado.configure(text='')
+
+        colores_boton = self.colores_usuario['boton']
+        boton_limpiar = tk.Button(
+            acciones, text='Limpiar', command=limpiar_formulario,
+            bg=colores_boton, fg=self._texto_contraste(colores_boton),
+            activebackground=colores_boton,
+            activeforeground=self._texto_contraste(colores_boton),
+            font=(FUENTE, TAM_BOTON, 'bold'), padx=18, pady=8,
+            bd=0, relief='flat', highlightthickness=0, cursor='hand2',
+            width=12,
+        )
+        boton_limpiar._rol_boton_apariencia = 'boton'
+        boton_limpiar.pack(side='right', padx=(0, ESPACIO_S))
+        color_crear = self.colores_usuario['acento']
+        boton_crear = tk.Button(
+            acciones, text='Crear usuario', command=registrar,
+            bg=color_crear, fg=self._texto_contraste(color_crear),
+            activebackground=color_crear,
+            activeforeground=self._texto_contraste(color_crear),
+            font=(FUENTE, TAM_BOTON, 'bold'), padx=18, pady=8,
+            bd=0, relief='flat', highlightthickness=0, cursor='hand2',
+            width=15,
+        )
+        boton_crear._rol_boton_apariencia = 'acento'
+        boton_crear.pack(side='right')
         entrada_usuario.bind('<Return>', lambda _evento: entrada_contrasena.focus_set())
         entrada_contrasena.bind('<Return>', lambda _evento: entrada_confirmacion.focus_set())
         entrada_confirmacion.bind('<Return>', lambda _evento: registrar())

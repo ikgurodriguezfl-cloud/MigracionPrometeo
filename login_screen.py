@@ -29,6 +29,7 @@ class LoginScreen:
         alto = min(680, self.root.winfo_screenheight() - 72)
         self.root.geometry(f'{ancho}x{alto}')
         self.root.minsize(min(800, ancho), min(620, alto))
+        self.root.state('zoomed')
         self.root.resizable(True, True)
         self.root.configure(background=LOGIN_FONDO)
 
