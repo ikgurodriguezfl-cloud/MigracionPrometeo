@@ -3,6 +3,7 @@ Lectura de base de datos Access (.mdb) de Prometeo.
 Extrae registros de FICHAS y EJEMPLARES y los devuelve como diccionarios.
 """
 import os
+import re
 import pyodbc
 from typing import List, Dict, Optional, Iterator
 from datetime import datetime
@@ -26,7 +27,7 @@ class AccessReader:
         self.driver = driver
         self.conn_str = (
             f"DRIVER={driver};"
-            f"DBQ={mdb_path};"
+            f"DBQ={mdb_path};ReadOnly=1;"
         )
         self._conn = None
 
@@ -84,24 +85,33 @@ class AccessReader:
         Ficha_No, Fecha, FechaMod, DatosFijos, EtiquetasMARC, TipoMaterial,
         ISBN, Titulo, Autor, Clasificacion
         """
-        cursor = self.conn.cursor()
-        if limite and limite > 0:
-            sql = """
-                SELECT TOP {limite} Ficha_No, Fecha, FechaMod, DatosFijos,
-                EtiquetasMARC, TipoMaterial, ISBN, Titulo, Autor, Clasificacion
-                FROM FICHAS
-            """.format(limite=limite)
-        else:
-            sql = """
-                SELECT Ficha_No, Fecha, FechaMod, DatosFijos, EtiquetasMARC,
-                       TipoMaterial, ISBN, Titulo, Autor, Clasificacion
-                FROM FICHAS
-            """
+        return [ficha for bloque in self.iterar_bloques(limite) for ficha in bloque]
 
-        cursor.execute(sql)
-        columnas = [desc[0] for desc in cursor.description]
-        filas = cursor.fetchall()
-        return [dict(zip(columnas, fila)) for fila in filas]
+    def iterar_bloques(self, limite=None, tamano=250):
+        """Lee un bloque a la vez en un orden estable, incluso al repetir un lote."""
+        cursor = self.conn.cursor()
+        try:
+            tope = f'TOP {int(limite)} ' if limite and limite > 0 else ''
+            cursor.execute(
+                f'SELECT {tope}Ficha_No, Fecha, FechaMod, DatosFijos, EtiquetasMARC, '
+                'TipoMaterial, ISBN, Titulo, Autor, Clasificacion FROM FICHAS ORDER BY Ficha_No'
+            )
+            columnas = [desc[0] for desc in cursor.description]
+            while filas := cursor.fetchmany(tamano):
+                yield [dict(zip(columnas, fila)) for fila in filas]
+        finally:
+            cursor.close()
+
+    def codigos_adquisicion_repetidos(self):
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                'SELECT Trim(NumAdqui) FROM EJEMPLARES '
+                'WHERE NumAdqui IS NOT NULL GROUP BY Trim(NumAdqui) HAVING COUNT(*) > 1'
+            )
+            return {str(fila[0]).strip().casefold() for fila in cursor if fila[0]}
+        finally:
+            cursor.close()
 
     def leer_ejemplares_por_ficha(self, ficha_nos: List[int]) -> Dict[int, List[Dict]]:
         """
@@ -166,7 +176,7 @@ class AccessReader:
 def parsear_etiquetas_marc(texto: Optional[str]) -> List[Dict]:
     """
     Parsea el campo EtiquetasMARC de Access.
-    Formato aproximado: ¦020¦contenido¦041¦contenido¦082895.63¦1
+    Formato compacto de Prometeo: ¦020ISBN¦041SPA¦082Clasificación.
     Devuelve lista de diccionarios: {"tag": "020", "content": "..."}
     """
     if not texto:
@@ -176,23 +186,14 @@ def parsear_etiquetas_marc(texto: Optional[str]) -> List[Dict]:
     if not texto.startswith("¦"):
         return []
 
+    # Ì es el terminador del bloque, no parte del último campo bibliográfico.
+    texto = texto.removesuffix('Ì')
     campos = []
-    partes = texto.split("¦")
-    # Las partes alternan: ["", "020", "contenido", "041", "contenido", ...]
-    i = 1
-    while i < len(partes) - 1:
-        tag = partes[i].strip()
-        contenido = partes[i + 1].strip() if i + 1 < len(partes) else ""
-        # Si el tag tiene más de 3 caracteres, puede ser que el contenido
-        # se haya pegado al tag (ej: "082895.63"). Intentar separar.
-        if len(tag) == 3 and tag.isdigit():
-            campos.append({"tag": tag, "content": contenido})
-            i += 2
-        elif len(tag) > 3 and tag[:3].isdigit():
-            campos.append({"tag": tag[:3], "content": tag[3:] + " " + contenido})
-            i += 2
-        else:
-            i += 1
+    for parte in re.split(r'¦(?=\d{3})', texto[1:]):
+        coincidencia = re.fullmatch(r'(\d{3})(.*)', parte, re.DOTALL)
+        if coincidencia:
+            tag, contenido = coincidencia.groups()
+            campos.append({'tag': tag, 'content': contenido.replace('¦', ' ').strip()})
     return campos
 
 

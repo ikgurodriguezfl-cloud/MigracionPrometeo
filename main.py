@@ -1,4 +1,4 @@
-"""Punto de entrada de la aplicacion Prometeo Migrator."""
+"""Punto de entrada de la aplicación NexoMARC."""
 import os
 import sys
 
@@ -19,11 +19,13 @@ def main():
         auth_service.ensure_admin(admin_password)
 
     def mostrar_login():
+        # Ningún refresco de la sesión anterior debe alterar la pantalla de acceso.
+        root.unbind_all('<Map>')
         # Limpiar todos los widgets de la ventana actual
         for widget in root.winfo_children():
             widget.destroy()
 
-        root.title('Prometeo Migrator - Inicio de sesion')
+        root.title('NexoMARC | Inicio de sesión')
         try:
             LoginScreen(root, auth_service=auth_service, on_login_success=ir_a_principal)
         except TypeError as error:
@@ -34,15 +36,13 @@ def main():
     def ir_a_principal(session_token=None):
         # El atajo del login no debe reiniciar la aplicación al usar el panel.
         root.unbind('<Return>')
+        root.unbind_all('<Map>')
         # Limpiar todos los widgets de la ventana actual
         for widget in root.winfo_children():
             widget.destroy()
 
-        # Ajustar titulo y tamanio para la pantalla principal
-        root.title('Prometeo Migrator - Access a MARC21 (Koha)')
-        root.geometry('900x650')
-        root.minsize(800, 600)
-        root.resizable(True, True)
+        # La aplicación principal define su geometría según la resolución disponible.
+        root.title('NexoMARC | Migración Access a MARC21 (Koha)')
 
         # Cargar la aplicacion principal
         try:
