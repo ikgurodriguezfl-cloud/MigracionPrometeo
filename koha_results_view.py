@@ -6,6 +6,7 @@ from tkinter import ttk, messagebox, filedialog
 
 from koha_importer import KohaResponseParser
 from mysql_writer import MySQLWriter
+from avisos import mensaje_error
 from ui_kit import (
     SUPERFICIE, TEXTO, TEXTO_MUTADO,
     EXITO, EXITO_SUAVE, ERROR, ERROR_SUAVE, ADVERTENCIA,
@@ -225,7 +226,7 @@ class VistaResultadosKoha(ttk.Frame):
     def importar_archivo_koha(self):
         lote_id = self.var_lote.get().strip()
         if not lote_id:
-            messagebox.showwarning('Lote requerido', 'Selecciona o escribe primero el identificador del lote.')
+            messagebox.showwarning('Lote requerido', 'Selecciona o escribe primero el número del lote.')
             return
 
         ruta = filedialog.askopenfilename(
@@ -256,7 +257,7 @@ class VistaResultadosKoha(ttk.Frame):
             if self.on_registrar_evento:
                 self.on_registrar_evento(
                     lote_id,
-                    f"Importación Koha conciliada: {res['aceptados']} aceptados, "
+                    f"Resultados de Koha verificados: {res['aceptados']} aceptados, "
                     f"{res['rechazados']} rechazados ({res['estado_conciliacion']})."
                 )
             self._actualizar_opciones_lotes()
@@ -264,22 +265,22 @@ class VistaResultadosKoha(ttk.Frame):
 
             if res['estado_conciliacion'] == 'CONCILIADO':
                 messagebox.showinfo(
-                    'Importación Koha conciliada',
-                    f"Lote {lote_id} conciliado correctamente:\n"
+                    'Resultados de Koha verificados',
+                    f"Lote {lote_id} verificado correctamente:\n"
                     f"• Enviados: {res['enviados']}\n"
                     f"• Aceptados por Koha: {res['aceptados']}\n"
                     f"• Rechazados por Koha: {res['rechazados']}"
                 )
             else:
                 messagebox.showwarning(
-                    'Discrepancia detectada en conciliación',
-                    f"Los conteos de Koha no coinciden con el total enviado del lote {lote_id}:\n"
+                    'Hay una diferencia en los resultados',
+                    f"La cantidad de fichas informada por Koha no coincide con lo enviado en el lote {lote_id}:\n"
                     f"• Enviados esperados: {res['enviados']}\n"
                     f"• Reportados por Koha: {res['aceptados'] + res['rechazados']} "
                     f"({res['aceptados']} aceptados + {res['rechazados']} rechazados)"
                 )
         except Exception as exc:
-            messagebox.showerror('Error al procesar respuesta de Koha', str(exc))
+            messagebox.showerror('Error al procesar respuesta de Koha', mensaje_error(exc, 'No se pudo leer el resultado de Koha. Comprueba que elegiste el archivo y el lote correctos e inténtalo de nuevo.'))
         finally:
             if writer:
                 writer.close()
@@ -300,7 +301,7 @@ class VistaResultadosKoha(ttk.Frame):
             if not filas:
                 messagebox.showinfo(
                     'Sin registros migrados',
-                    'Primero ejecuta una migración de Access a MySQL para tener registros reales.'
+                    'Primero migra un lote para tener fichas con las que realizar la prueba.'
                 )
                 return
 
@@ -335,14 +336,14 @@ class VistaResultadosKoha(ttk.Frame):
             self._actualizar_opciones_lotes()
             self.cargar_datos(silencioso=True)
             messagebox.showinfo(
-                'Conciliación de prueba completada',
-                f"Se procesaron {res['enviados']} registros reales de MySQL:\n"
+                'Prueba terminada',
+                f"Se procesaron {res['enviados']} fichas guardadas:\n"
                 f"• Aceptados: {res['aceptados']}\n"
                 f"• Rechazados: {res['rechazados']}\n"
-                f"• Estado: {res['estado_conciliacion']}"
+                f"• Resultado: {'Las cantidades coinciden' if res['estado_conciliacion'] == 'CONCILIADO' else 'Hay diferencias que revisar'}"
             )
         except Exception as exc:
-            messagebox.showerror('Error en prueba', str(exc))
+            messagebox.showerror('Error en prueba', mensaje_error(exc, 'No se pudo completar la prueba. Comprueba la conexión y que haya fichas guardadas.'))
         finally:
             if writer:
                 writer.close()
@@ -351,7 +352,7 @@ class VistaResultadosKoha(ttk.Frame):
         lote = self.var_lote.get().strip()
         if not lote:
             if not silencioso:
-                messagebox.showwarning('Lote requerido', 'Selecciona o ingresa el identificador del lote a consultar.')
+                messagebox.showwarning('Lote requerido', 'Selecciona o escribe el número del lote que quieres consultar.')
             return
         writer = None
         try:
@@ -382,7 +383,7 @@ class VistaResultadosKoha(ttk.Frame):
             self.filtrar_tabla(writer)
         except Exception as exc:
             if not silencioso:
-                messagebox.showerror('Error al consultar Koha', str(exc))
+                messagebox.showerror('Error al consultar Koha', mensaje_error(exc, 'No se pudieron cargar los resultados de Koha. Revisa la conexión e inténtalo de nuevo.'))
         finally:
             if writer:
                 writer.close()
@@ -424,7 +425,7 @@ class VistaResultadosKoha(ttk.Frame):
                     tags=(estado,),
                 )
         except Exception as exc:
-            messagebox.showerror('Error de filtrado', str(exc))
+            messagebox.showerror('Error de filtrado', mensaje_error(exc, 'No se pudieron mostrar los resultados. Revisa los filtros y vuelve a intentarlo.'))
         finally:
             if cerrar_al_final and writer:
                 writer.close()
@@ -440,7 +441,7 @@ class VistaResultadosKoha(ttk.Frame):
                 return
             registros = writer.listar_detalle_koha(lote)
         except Exception as exc:
-            messagebox.showerror('Error', str(exc))
+            messagebox.showerror('Error', mensaje_error(exc, 'No se pudo guardar el reporte. Comprueba la carpeta de destino e inténtalo de nuevo.'))
             return
         finally:
             if writer:

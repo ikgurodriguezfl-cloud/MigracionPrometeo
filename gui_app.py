@@ -12,6 +12,7 @@ from time import monotonic
 from typing import Optional, Dict, Any, List
 
 from auth import AuthenticationService
+from avisos import AvisoUsuario, mensaje_error
 from access_reader import AccessReader
 from marc_converter import MarcConverter
 from validacion_marc import ERROR as ERROR_MARC, Incidencia, cargar_framework, inspeccionar_copias, validar_ficha
@@ -21,7 +22,7 @@ from lotes import ETAPAS, HistorialLotes, acciones_lote, ahora
 from panel_lotes import PanelLotes
 from koha_results_view import VistaResultadosKoha
 from permissions import (
-    requerir_permiso, AccesoDenegado, tiene_permiso,
+    requerir_permiso, AccesoDenegado, tiene_permiso, motivo_bloqueo_correccion,
 )
 from ui_kit import (
     FONDO, SUPERFICIE, SUPERFICIE_ALT, TEXTO, TEXTO_SECUNDARIO,
@@ -126,6 +127,7 @@ class MigracionApp:
         self._detencion_solicitada = threading.Event()
         self.historial_lotes = historial_lotes if historial_lotes is not None else HistorialLotes()
         self._lote_actual_id = None
+        self._lote_resultado_id = None
         self._lote_reprocesar_id = None
         self._validacion_access = None
         self._eventos_ui = Queue()
@@ -138,7 +140,7 @@ class MigracionApp:
         if self.historial_lotes.error_carga:
             self.log('[AVISO] ' + self.historial_lotes.error_carga)
             self.root.after(0, messagebox.showwarning, 'Historial no disponible',
-                            self.historial_lotes.error_carga + '\nSe conservó el archivo anterior. No se iniciarán nuevas migraciones hasta resolverlo.')
+                            'No se pudo abrir el historial. El archivo anterior se conservó. Pide ayuda al administrador para recuperarlo antes de iniciar otra migración.')
 
     def _crear_interfaz(self):
         self._estilos_interfaz()
@@ -573,7 +575,7 @@ class MigracionApp:
         if not self._validacion_access or not self._mysql_validado:
             messagebox.showwarning(
                 'Completa la conexión',
-                'Valida primero el archivo Access y la conexión MySQL para continuar.',
+                'Comprueba primero el respaldo y la conexión con el catálogo de destino para continuar.',
             )
             return
         self._navegar(self.frame_config)
@@ -589,7 +591,7 @@ class MigracionApp:
             self._validar_mapeo_runtime(branch_mapping, 'sucursales')
             self._validar_mapeo_runtime(status_mapping, 'estados')
         except ValueError as exc:
-            messagebox.showerror('Configuración no válida', str(exc))
+            messagebox.showerror('Configuración no válida', mensaje_error(exc, 'Revisa los datos de configuración y las equivalencias antes de continuar.'))
             return
         self._configuracion_confirmada = True
         self._actualizar_navegacion_secuencial()
@@ -706,7 +708,7 @@ class MigracionApp:
         f.configure(padding=(ESPACIO_L, ESPACIO_M, ESPACIO_L, ESPACIO_XL))
         self._encabezado_pagina(
             f, 'Ejecuta la migración',
-            'El proceso conserva avances por lote. Los valores no contemplados se registran como incidencias; no se infieren correspondencias.',
+            'El avance se guarda por lote. Al terminar podrás revisar los resultados y las fichas que necesiten atención.',
             icono='play',
         )
 
@@ -731,7 +733,7 @@ class MigracionApp:
         lbl_prog.pack(fill='both', expand=True)
         lbl_prog.columnconfigure(0, weight=1)
         ttk.Label(
-            lbl_prog, text='Conversión Access → MARC21 → MySQL',
+            lbl_prog, text='Migración de las fichas del catálogo',
             style='CardTitle.TLabel',
         ).grid(row=0, column=0, sticky='w', pady=(0, ESPACIO_XS))
         ttk.Label(
@@ -745,10 +747,10 @@ class MigracionApp:
         self.lbl_estado = ttk.Label(lbl_prog, text='Listo para iniciar.', style='CardMetric.TLabel')
         self.lbl_estado.grid(row=3, column=0, sticky='w', pady=(0, ESPACIO_S))
 
-        self.lbl_stats = ttk.Label(lbl_prog, text='Convertidas: 0  ·  Omitidas: 0  ·  Rechazadas: 0')
+        self.lbl_stats = ttk.Label(lbl_prog, text='Guardadas: 0  ·  Ya existentes: 0  ·  Sin migrar: 0', wraplength=850)
         self.lbl_stats.grid(row=4, column=0, sticky='w')
         btn_frame = ttk.Frame(lbl_prog, style='App.TFrame')
-        btn_frame.grid(row=5, column=0, sticky='ew', pady=(ESPACIO_L, 0))
+        btn_frame.grid(row=6, column=0, sticky='ew', pady=(ESPACIO_S, 0))
         self.btn_ejecutar = ttk.Button(
             btn_frame, text='Iniciar migración', style='Primary.TButton',
             command=self._iniciar_migracion,
@@ -764,6 +766,22 @@ class MigracionApp:
             command=self._exportar_marcxml,
         )
         self.btn_exportar.pack(side='left')
+
+        self.acciones_fin_migracion = ttk.Frame(lbl_prog, style='App.TFrame')
+        self.acciones_fin_migracion.grid(row=5, column=0, sticky='ew', pady=(ESPACIO_S, 0))
+        self.lbl_resultado_migracion = ttk.Label(
+            self.acciones_fin_migracion, style='CardHint.TLabel', wraplength=760,
+        )
+        self.lbl_resultado_migracion.pack(anchor='w')
+        self.btn_verificar_lote = ttk.Button(
+            btn_frame, text='Verificar lote', style='Primary.TButton',
+            command=self._verificar_lote_finalizado,
+        )
+        self.btn_volver_inicio = ttk.Button(
+            btn_frame, text='Volver al inicio', style='Secondary.TButton',
+            command=self._volver_inicio_migracion,
+        )
+        self.acciones_fin_migracion.grid_remove()
 
     def _crear_pestana_config(self):
         f = self.frame_config
@@ -958,7 +976,7 @@ class MigracionApp:
             try:
                 cargar_framework(ruta)
             except (OSError, ValueError) as exc:
-                messagebox.showerror('Framework no válido', str(exc))
+                messagebox.showerror('Reglas del catálogo no válidas', mensaje_error(exc, 'No se pudo leer el archivo de reglas del catálogo. Selecciona un archivo válido e inténtalo de nuevo.'))
                 return
             self.ruta_framework = ruta
             self._mostrar_framework()
@@ -974,7 +992,7 @@ class MigracionApp:
             self._validar_mapeo_runtime(branch_mapping, 'sucursales')
             self._validar_mapeo_runtime(status_mapping, 'estados')
         except ValueError as exc:
-            messagebox.showerror('Mapeo no válido', str(exc))
+            messagebox.showerror('Revisa las equivalencias', mensaje_error(exc, 'Revisa las equivalencias de bibliotecas y estados. Cada valor debe tener una opción de destino.'))
             return
         # Recopila los valores visibles y los persiste como JSON.
         config = {
@@ -1004,11 +1022,11 @@ class MigracionApp:
                 json.dump(config, f, indent=2, ensure_ascii=False)
             self.config = config
             self._configuracion_confirmada = True
-            messagebox.showinfo('Exito', 'Configuracion guardada.')
+            messagebox.showinfo('Configuración guardada', 'Los cambios de configuración se guardaron.')
             self.log('Configuracion guardada.')
             self._actualizar_panel()
         except Exception as e:
-            messagebox.showerror('Error', 'No se pudo guardar la configuracion:\n' + str(e))
+            messagebox.showerror('Error', mensaje_error(e, 'No se pudo guardar la configuración. Comprueba que puedas guardar archivos en esta carpeta e inténtalo de nuevo.'))
 
     def _parsear_json_texto(self, texto: str, default: Any) -> Any:
         texto = texto.strip()
@@ -1202,7 +1220,7 @@ class MigracionApp:
         if not lote.destino:
             messagebox.showerror(
                 'Destino no registrado',
-                'El lote no tiene un destino MySQL guardado y no se puede reprocesar con seguridad.',
+                'No se sabe dónde se guardaron las fichas de este lote. Pide ayuda al administrador antes de volver a migrarlo.',
             )
             return
         if not os.path.isfile(lote.fuente):
@@ -1214,9 +1232,9 @@ class MigracionApp:
         if not messagebox.askyesno(
             'Reprocesar lote',
             f'Se creará un nuevo intento a partir de {identificador}. '
-            'Los registros MARC existentes no se reemplazarán; se volverán '
+            'Las fichas guardadas se conservarán; se volverán '
             'a revisar las fichas y se completarán los registros o ejemplares faltantes. '
-            'Deberás validar Access y MySQL antes de iniciar. ¿Continuar?',
+            'Deberás comprobar el respaldo y la conexión antes de iniciar. ¿Continuar?',
         ):
             return
 
@@ -1254,7 +1272,7 @@ class MigracionApp:
             self.auth_service.require_authenticated(self.session_token)
             return True
         except PermissionError as error:
-            messagebox.showerror('Sesion cerrada', str(error))
+            messagebox.showerror('Sesión cerrada', str(error))
             return False
 
     def _cerrar_sesion(self):
@@ -1348,9 +1366,9 @@ class MigracionApp:
             'Revision': 'Puede consultar registros, registrar observaciones y proponer '
                         'correcciones. No puede ejecutar ni reprocesar migraciones.',
             'Aprobacion': 'Puede ejecutar, revisar, aprobar correcciones, exportar '
-                          'registros y gestionar el flujo completo de migración.',
+                          'registros y gestionar la migración. Sus propias correcciones debe aprobarlas otra persona.',
             'Administracion': 'Tiene los mismos permisos operativos que Aprobación y, '
-                              'además, puede crear usuarios.',
+                              'además, puede crear usuarios y aprobar sus propias correcciones.',
         }
 
         def mostrar_descripcion_perfil(_evento=None):
@@ -1368,16 +1386,16 @@ class MigracionApp:
                 confirmacion = entrada_confirmacion.get()
                 perfil = combo_perfil.get()
                 if not usuario or not contrasena or not confirmacion:
-                    raise ValueError('Complete todos los campos.')
+                    raise AvisoUsuario('Completa todos los campos para crear la cuenta.')
                 if contrasena != confirmacion:
-                    raise ValueError('Las contrasenas no coinciden.')
+                    raise AvisoUsuario('Las contraseñas no coinciden. Escríbelas de nuevo.')
                 self.auth_service.create_user(usuario, contrasena, perfil)
             except sqlite3.IntegrityError:
                 messagebox.showerror('Registro rechazado', 'Ese usuario ya existe.', parent=self.root)
                 entrada_usuario.focus_set()
                 return
             except (PermissionError, ValueError) as error:
-                messagebox.showerror('Registro rechazado', str(error), parent=self.root)
+                messagebox.showerror('Registro rechazado', mensaje_error(error, 'No se pudo crear la cuenta. Revisa el nombre, la contraseña y el perfil elegido.'), parent=self.root)
                 return
             entrada_usuario.delete(0, tk.END)
             entrada_contrasena.delete(0, tk.END)
@@ -1471,7 +1489,7 @@ class MigracionApp:
             messagebox.showwarning('Migración en curso', 'Espera a que termine el lote activo.')
             return
         if not path:
-            messagebox.showwarning('Atencion', 'Seleccione primero un archivo .mdb o .accdb')
+            messagebox.showwarning('Atención', 'Selecciona primero el archivo de respaldo (.mdb o .accdb).')
             return
         if self._validando_access:
             return
@@ -1526,7 +1544,7 @@ class MigracionApp:
         if error:
             self.lbl_conteo_access.config(text='El respaldo requiere revisión.')
             self.log('[ERROR] Access: ' + error)
-            messagebox.showerror('No se pudo validar Access', error)
+            messagebox.showerror('No se pudo revisar el respaldo', mensaje_error(error, 'No se pudo revisar el respaldo. Comprueba que el archivo esté disponible y sea un respaldo válido. Si continúa el problema, pide ayuda al administrador.'))
             return
         self._validacion_access = firma
         self._lote_actual_id = identificador
@@ -1541,7 +1559,7 @@ class MigracionApp:
             return
         destino = self._destino_actual()
         if not destino.get('host') or not destino.get('database') or not 1 <= destino['port'] <= 65535:
-            messagebox.showerror('Destino no válido', 'Revisa el servidor, el puerto y la base MySQL.')
+            messagebox.showerror('Destino no válido', 'Revisa los datos de conexión del catálogo de destino en la pestaña Conexión.')
             return
         config = {**destino, 'user': self.entry_user.get(),
                   'password': self.entry_pass.get(), 'charset': 'utf8mb4'}
@@ -1585,7 +1603,7 @@ class MigracionApp:
             self.lbl_conteo_mysql.config(text='Destino pendiente de validar')
             return
         if falta_base and messagebox.askyesno(
-            'Base de datos no existe', f'¿Quieres crear la base de datos {config["database"]}?',
+            'Catálogo de destino no encontrado', f'¿Quieres crear la base de datos {config["database"]}?',
         ):
             self._iniciar_validacion_mysql(config, crear=True)
             return
@@ -1593,7 +1611,7 @@ class MigracionApp:
             self.lbl_conteo_mysql.config(text='Destino pendiente de validar')
             self.log('[ERROR] MySQL: ' + mensaje)
             if not falta_base:
-                messagebox.showerror('No se pudo validar MySQL', mensaje)
+                messagebox.showerror('No se pudo comprobar la conexión', mensaje_error(mensaje, 'No se pudo conectar con el catálogo de destino. Revisa los datos de conexión y comprueba que el servidor esté disponible.'))
         else:
             self._mysql_validado = True
             self.lbl_conteo_mysql.config(text=f'Registros migrados: {stats["total_registros"]:,}')
@@ -1612,7 +1630,7 @@ class MigracionApp:
             return
             
         if self.migracion_en_curso:
-            messagebox.showwarning('Atencion', 'Ya hay una migracion en curso.')
+            messagebox.showwarning('Atención', 'Ya hay una migración en curso. Espera a que termine antes de iniciar otra.')
             return
         if self.historial_lotes.solo_lectura:
             messagebox.showerror('Historial no disponible', 'Resuelve el problema del historial antes de iniciar otra migración.')
@@ -1620,7 +1638,7 @@ class MigracionApp:
 
         path_access = self.var_access_path.get().strip()
         if not path_access or not os.path.exists(path_access):
-            messagebox.showerror('Error', 'Seleccione un archivo .mdb o .accdb valido.')
+            messagebox.showerror('Error', 'Selecciona un archivo de respaldo válido (.mdb o .accdb).')
             return
 
         if self._validando_access or self._validando_mysql:
@@ -1628,11 +1646,11 @@ class MigracionApp:
             return
         destino = self._destino_actual()
         if not destino.get('host') or not destino.get('database') or not 1 <= destino['port'] <= 65535:
-            messagebox.showerror('Destino no válido', 'Revisa el servidor, el puerto y la base MySQL.')
+            messagebox.showerror('Destino no válido', 'Revisa los datos de conexión del catálogo de destino en la pestaña Conexión.')
             return
         limite_str = self.var_limite.get().strip()
         if not limite_str.isdecimal():
-            messagebox.showerror('Límite no válido', 'Usa un entero no negativo. 0 procesa todo el respaldo.')
+            messagebox.showerror('Cantidad no válida', 'Escribe una cantidad sin decimales, mayor o igual a 0. Usa 0 para migrar todas las fichas.')
             return
         limite = int(limite_str)
         config_mysql = {
@@ -1661,11 +1679,16 @@ class MigracionApp:
             )
             huella_mapeo = conversor.mapping_fingerprint(branch_mapping, status_mapping)
         except (OSError, ValueError) as exc:
-            messagebox.showerror('Mapeo no válido', str(exc))
+            messagebox.showerror('Revisa las equivalencias', mensaje_error(exc, 'Revisa las equivalencias de bibliotecas y estados. Cada valor debe tener una opción de destino.'))
             return
         self.marc_converter = conversor
         self.migracion_en_curso = self._preparando_lote = True
         self._lote_actual_id = None
+        self._lote_resultado_id = None
+        self.acciones_fin_migracion.grid_remove()
+        self.btn_verificar_lote.pack_forget()
+        self.btn_volver_inicio.pack_forget()
+        self.btn_ejecutar.configure(style='Primary.TButton')
         self._detencion_solicitada.clear()
         self.progress['value'] = 0
         self.lbl_estado.config(text='Validando el respaldo de Access…')
@@ -1727,7 +1750,7 @@ class MigracionApp:
         if mensaje:
             self.lbl_estado.config(text='No se pudo preparar la migración.')
             self.log('[ERROR] Preparación: ' + mensaje)
-            messagebox.showerror('No se pudo preparar el lote', mensaje)
+            messagebox.showerror('No se pudo preparar el lote', mensaje_error(mensaje, 'No se pudo iniciar la migración. Revisa el respaldo y la conexión antes de volver a intentarlo.'))
         else:
             self.lbl_estado.config(text='Preparación detenida.')
 
@@ -1876,13 +1899,16 @@ class MigracionApp:
             self.log(f'Lote {lote_id} finalizado. Convertidas: {cont_ok}, omitidas: {cont_omitidos}, '
                      f'rechazadas: {cont_err}, convertidas con bloqueo MARC: {bloqueos_marc}.')
             self._publicar_ui(self._finalizar_migracion)
-            titulo = 'Lote concluido con advertencias' if tiene_incidencias else 'Lote concluido'
+            titulo = 'Migración terminada: hay avisos para revisar' if tiene_incidencias else 'Migración terminada'
             if cont_err or bloqueos_marc:
                 titulo = 'Lote con fichas por corregir'
             self._publicar_ui(messagebox.showwarning if cont_err or bloqueos_marc else messagebox.showinfo, titulo,
-                f'Convertidas: {cont_ok:,}\nCon bloqueo MARC: {bloqueos_marc:,}\n'
-                f'Con solo advertencias: {con_advertencias:,}\n'
-                f'Ya existentes: {cont_omitidos:,}\nRechazadas al migrar: {cont_err:,}\nEjemplares: {cont_ejemplares:,}')
+                f'Fichas guardadas: {cont_ok:,}\n'
+                f'De las guardadas, necesitan correcciones: {bloqueos_marc:,}\n'
+                f'De las guardadas, tienen avisos para revisar: {con_advertencias:,}\n'
+                f'Fichas que ya estaban guardadas: {cont_omitidos:,}\n'
+                f'Fichas que no se pudieron migrar: {cont_err:,}\nEjemplares: {cont_ejemplares:,}\n\n'
+                'Pulsa «Verificar lote» para revisar los resultados o «Volver al inicio» para continuar.')
         except _DetencionSolicitada:
             try:
                 lote = self.historial_lotes.obtener(lote_id, resumen=True)
@@ -1893,7 +1919,7 @@ class MigracionApp:
                     f'Se conservó el avance. Pendientes: {pendientes}.')
             except (OSError, ValueError) as exc:
                 self._publicar_ui(self._finalizar_migracion)
-                self._publicar_ui(messagebox.showerror, 'No se pudo guardar la detención', str(exc))
+                self._publicar_ui(messagebox.showerror, 'No se pudo guardar la detención', mensaje_error(exc, 'No se pudo confirmar el último avance. Revisa el lote y el espacio disponible antes de volver a intentarlo.'))
         except Exception as exc:
             mensaje = self._error_mysql_sin_secreto(exc, config_mysql.get('password'))
             prioritarias.append({'referencia': 'Ejecución', 'mensaje': mensaje})
@@ -1903,7 +1929,7 @@ class MigracionApp:
                 self.log('[ERROR] No se pudo guardar el último avance del lote: ' + str(error_historial))
             self.log(f'[ERROR FATAL] Lote {lote_id}: {mensaje}')
             self._publicar_ui(self._finalizar_migracion)
-            self._publicar_ui(messagebox.showerror, 'Error en migración', mensaje)
+            self._publicar_ui(messagebox.showerror, 'Error en migración', mensaje_error(mensaje, 'La migración se interrumpió. Pulsa «Verificar lote» para revisar el avance y las fichas pendientes antes de volver a intentarlo.'))
         finally:
             for recurso in (bloques, reader, writer):
                 if recurso is not None:
@@ -1964,13 +1990,46 @@ class MigracionApp:
             estado = 'Deteniendo al terminar la ficha u operación en curso…'
         self.lbl_estado.config(text=f'{lote.id}: {lote.procesados}/{lote.total_objetivo} · {estado}')
         bloqueos = 'Sin conteo' if lote.bloqueos_marc is None else str(lote.bloqueos_marc)
-        self.lbl_stats.config(text=f'Convertidas: {lote.correctos} | Omitidas: {lote.omitidos} | '
-                                   f'Rechazadas: {lote.errores} | Con bloqueo MARC al migrar: {bloqueos} | Ejemplares: {lote.ejemplares}')
+        self.lbl_stats.config(text=f'Guardadas: {lote.correctos}  ·  Ya existentes: {lote.omitidos}  ·  '
+                                   f'Sin migrar: {lote.errores}\n'
+                                   f'Guardadas que necesitan correcciones: {bloqueos}  ·  Ejemplares: {lote.ejemplares}')
         self._actualizar_panel()
 
     def _finalizar_migracion(self):
         self.migracion_en_curso = self._preparando_lote = False
         self._actualizar_panel()
+        self._lote_resultado_id = self._lote_actual_id
+        lote = self.historial_lotes.obtener(self._lote_resultado_id, resumen=True)
+        if lote is None:
+            self.acciones_fin_migracion.grid_remove()
+            self.btn_verificar_lote.pack_forget()
+            self.btn_volver_inicio.pack_forget()
+            return
+        if lote.estado == 'concluido':
+            mensaje = 'La migración terminó. Puedes verificar el lote o volver al inicio.'
+        elif lote.estado == 'detenido':
+            mensaje = 'La migración se detuvo. Verifica el lote para consultar el avance guardado.'
+        else:
+            mensaje = 'El proceso terminó con pendientes. Verifica el lote para saber qué necesita atención.'
+        self.lbl_resultado_migracion.configure(text=mensaje)
+        self.acciones_fin_migracion.grid()
+        self.btn_verificar_lote.pack(side='left', padx=(0, ESPACIO_S), before=self.btn_ejecutar)
+        self.btn_volver_inicio.pack(side='left', padx=(0, ESPACIO_S), before=self.btn_ejecutar)
+        self.btn_ejecutar.configure(style='Secondary.TButton')
+
+    def _verificar_lote_finalizado(self):
+        if not self._sesion_valida() or self.migracion_en_curso or not self._lote_resultado_id:
+            return
+        self.panel_lotes.seleccionar_real(self._lote_resultado_id)
+        self.panel_lotes._mostrar_detalle('resumen')
+        self._navegar(self.panel_lotes)
+
+    def _volver_inicio_migracion(self):
+        if not self._sesion_valida() or self.migracion_en_curso:
+            return
+        self.panel_lotes._mostrar_pagina_historial('lista')
+        self.panel_lotes._mostrar_vista('resumen')
+        self._navegar(self.panel_lotes)
 
     def _exportar_marcxml(self, lote_id=None):
         if not self._sesion_valida():
@@ -1989,7 +2048,7 @@ class MigracionApp:
             return
         if not self._politica_lote(lote)['exportar']:
             messagebox.showwarning('Exportación no disponible',
-                'Selecciona un lote terminado con fichas convertidas y el mismo destino MySQL.')
+                'Selecciona un lote terminado con fichas guardadas y conéctate al catálogo donde se migró.')
             return
         path = filedialog.asksaveasfilename(
             title='Exportar fichas validadas del lote', initialfile=lote.id, defaultextension='.xml',
@@ -2002,7 +2061,7 @@ class MigracionApp:
             perfil = self._framework_actual()
             writer = self._writer_revision()
         except (OSError, ValueError) as exc:
-            messagebox.showerror('Exportación no disponible', str(exc))
+            messagebox.showerror('Exportación no disponible', mensaje_error(exc, 'No se pudo preparar la exportación. Revisa la conexión y las reglas del catálogo antes de volver a intentarlo.'))
             return
         self._exportando = True
         self.log(f'Validando fichas de {lote.id} para exportación…')
@@ -2016,7 +2075,8 @@ class MigracionApp:
                 try:
                     self.historial_lotes.actualizar(lote.id, evento=mensaje)
                 except (OSError, ValueError) as exc:
-                    mensaje += f'\nEl archivo se guardó. Falló la anotación en el historial: {exc}'
+                    self.log(f'[ERROR] No se pudo actualizar el historial de exportación: {exc}')
+                    mensaje += '\nEl archivo se guardó, pero no se pudo actualizar el historial. Comprueba el archivo antes de repetir la exportación.'
                 self._publicar_ui(self._fin_exportacion, True, mensaje + '\n' + path)
             except Exception as exc:
                 self._publicar_ui(self._fin_exportacion, False,
@@ -2034,7 +2094,7 @@ class MigracionApp:
         if exito:
             messagebox.showinfo('Exportación terminada', mensaje)
         else:
-            messagebox.showerror('Exportación no completada', mensaje)
+            messagebox.showerror('Exportación no completada', mensaje_error(mensaje, 'No se pudo terminar la exportación. Revisa las fichas pendientes, la conexión y la carpeta de destino antes de volver a intentarlo.'))
 
     def _conectar_para_revision(self, writer):
         while True:
@@ -2151,7 +2211,7 @@ class MigracionApp:
             if not registro:
                 raise ValueError('No se encontró el registro MARC en el destino.')
             if registro[0]['huella_revision'] != huella_original:
-                raise ValueError(
+                raise AvisoUsuario(
                     'El registro cambió desde que se abrió para edición. '
                     'Actualiza la revisión y vuelve a proponer la corrección.'
                 )
@@ -2177,7 +2237,16 @@ class MigracionApp:
         writer = self._writer_revision()
         try:
             writer.connect()
-            return writer.listar_correcciones_pendientes(lote_id)
+            propuestas = writer.listar_correcciones_pendientes(lote_id)
+            usuario = self._usuario_actual()
+            for propuesta in propuestas:
+                for accion, aprobar in (('aprobar', True), ('rechazar', False)):
+                    motivo = motivo_bloqueo_correccion(
+                        self.perfil_usuario, usuario, propuesta['propuesto_por'], aprobar,
+                    )
+                    propuesta[f'puede_{accion}'] = not motivo
+                    propuesta[f'motivo_{accion}'] = motivo
+            return propuestas
         except Exception as exc:
             password = writer.config.get('password')
             raise RuntimeError(
@@ -2196,6 +2265,7 @@ class MigracionApp:
             writer.connect()
             estado = writer.resolver_correccion(
                 propuesta_id, lote_id, self._usuario_actual(), aprobar,
+                perfil_actual=self.perfil_usuario,
             )
             self.historial_lotes.actualizar(
                 lote.id,

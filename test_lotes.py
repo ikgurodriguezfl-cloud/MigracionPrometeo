@@ -440,7 +440,7 @@ class LotesTests(unittest.TestCase):
             'marca_iso2709': b'invalido',
         })
         self.assertEqual(recuperado['001'].data, '123')
-        self.assertIn('ISO2709', aviso)
+        self.assertIn('Los campos se recuperaron de otra copia', aviso)
 
         nuevo, aviso = record_para_edicion({
             'marca_marcxml': '<xml roto',
@@ -456,8 +456,8 @@ class LotesTests(unittest.TestCase):
         writer._conn = MagicMock()
         writer.conn.cursor.return_value.__enter__.return_value = cursor
 
-        with self.assertRaisesRegex(ValueError, 'no puede aprobarla ni rechazarla'):
-            writer.resolver_correccion(7, 'LOTE-1', 'revisor', True)
+        with self.assertRaisesRegex(ValueError, 'Solo el administrador'):
+            writer.resolver_correccion(7, 'LOTE-1', 'revisor', True, perfil_actual='Aprobacion')
 
         writer.conn.rollback.assert_called_once()
         writer.conn.commit.assert_not_called()
@@ -569,7 +569,7 @@ class LotesTests(unittest.TestCase):
         writer._conn = MagicMock()
         writer.conn.cursor.return_value.__enter__.return_value = cursor
 
-        resultado = writer.resolver_correccion(7, 'LOTE-1', 'aprobador', True)
+        resultado = writer.resolver_correccion(7, 'LOTE-1', 'aprobador', True, perfil_actual='Aprobacion')
 
         self.assertEqual(resultado, 'APROBADA')
         writer.conn.commit.assert_called_once()

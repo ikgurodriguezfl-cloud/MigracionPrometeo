@@ -1,19 +1,21 @@
 {
   "access": {
-    "path": "C:/Users/oswal/Downloads/PROMETEO (1).mdb",
+    "path": "C:/Users/Villa/Downloads/PROMETEO (1).mdb",
     "driver": "{Microsoft Access Driver (*.mdb, *.accdb)}"
   },
   "mysql": {
     "host": "localhost",
     "port": 3306,
     "user": "root",
-    "password": "Crespo1234",
-    "database": "koha_marc21",
+    "password": "",
+    "database": "prometeo_marc_itt",
     "charset": "utf8mb4"
   },
   "koha_branch_mapping": {
     "165": "ITT"
   },
+  "framework_koha_csv": "",
+  "edicion_dewey": "0",
   "item_status_mapping": {
     "0": "available",
     "1": "available",

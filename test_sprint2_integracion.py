@@ -546,6 +546,7 @@ class InterfazSprint2Tests(unittest.TestCase):
                 )
                 panel.listar_propuestas = Mock(return_value=[{
                     'id': 5, 'id_ficha_acceso': 12, 'propuesto_por': 'revisora',
+                    'puede_aprobar': True, 'puede_rechazar': True,
                     'fecha_creacion': '2026-01-03',
                     'marca_marcxml_actual': actual,
                     'marca_iso2709_actual': None,
@@ -827,6 +828,7 @@ class InterfazSprint2Tests(unittest.TestCase):
                 self.assertIn('Detención solicitada', app.panel_lotes.siguiente.cget('text'))
                 app.historial_lotes.actualizar(app._lote_actual_id, estado='detenido', evento='Detenido en prueba.')
                 app._finalizar_migracion()
+                self.assertEqual(app.acciones_fin_migracion.winfo_manager(), 'grid')
                 self.assertIn('disabled', app.btn_detener.state())
                 self.assertIn('disabled', app.panel_lotes.btn_exportar.state())
                 self.assertNotIn('disabled', app.panel_lotes.btn_resumen.state())

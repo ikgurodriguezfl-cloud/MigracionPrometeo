@@ -14,11 +14,12 @@ MATRIZ_PERMISOS = {
     "iniciar_conversion": ["Ejecucion", "Aprobacion", "Administracion"],
     "detener_conversion": ["Ejecucion", "Aprobacion", "Administracion"],
     "reprocesar_lote": ["Ejecucion", "Aprobacion", "Administracion"],
-    # Revision puede consultar, observar y proponer; solo Aprobacion resuelve propuestas.
+    # Aprobacion y Administracion resuelven propuestas; solo Administracion aprueba las propias.
     "revision_muestra": ["Revision", "Aprobacion", "Administracion"],
     "registrar_observacion": ["Revision", "Aprobacion", "Administracion"],
     "proponer_correccion": ["Revision", "Aprobacion", "Administracion"],
     "aprobar_correccion": ["Aprobacion", "Administracion"],
+    "aprobar_correccion_propia": ["Administracion"],
     "rechazar_correccion": ["Aprobacion", "Administracion"],
     "aprobar_exportacion": ["Aprobacion", "Administracion"],
     "exportar_historial": ["Ejecucion", "Revision", "Aprobacion", "Administracion"],
@@ -33,7 +34,7 @@ def requerir_permiso(perfil_actual: str, operacion: str):
     
     if perfil_actual not in permitidos:
         logging.warning(f"Seguridad: Acción '{operacion}' denegada. Perfil evaluado: '{perfil_actual}'.")
-        raise AccesoDenegado("Acceso denegado: El perfil no está autorizado para esta operación.")
+        raise AccesoDenegado("Tu cuenta no tiene permiso para realizar esta acción. Pide ayuda al administrador.")
         
     logging.info(f"Seguridad: Operación '{operacion}' concedida al perfil '{perfil_actual}'.")
     return True
@@ -41,3 +42,18 @@ def requerir_permiso(perfil_actual: str, operacion: str):
 
 def tiene_permiso(perfil_actual: str, operacion: str) -> bool:
     return perfil_actual in MATRIZ_PERMISOS.get(operacion, [])
+
+
+def motivo_bloqueo_correccion(perfil, usuario, autor, aprobar):
+    """La misma regla alimenta los botones y la decisión dentro de la transacción."""
+    permiso = 'aprobar_correccion' if aprobar else 'rechazar_correccion'
+    if not tiene_permiso(perfil, permiso):
+        return 'Tu cuenta no tiene permiso para decidir sobre esta corrección.'
+    if usuario == autor:
+        if aprobar and tiene_permiso(perfil, 'aprobar_correccion_propia'):
+            return ''
+        if aprobar:
+            return ('Solo el administrador puede aprobar sus propias correcciones. '
+                    'Pide a otra persona con permiso de aprobación que revise la tuya.')
+        return 'Pide a otra persona con permiso de aprobación que rechace tu corrección.'
+    return ''

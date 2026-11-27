@@ -6,6 +6,8 @@ from datetime import datetime
 from validacion_marc import ERROR, inspeccionar_copias
 import pymysql
 from typing import Dict, Optional
+from avisos import AvisoUsuario
+from permissions import requerir_permiso, motivo_bloqueo_correccion
 
 
 class MySQLWriter:
@@ -479,11 +481,11 @@ class MySQLWriter:
                 )
                 actual = cur.fetchone()
                 if actual is None:
-                    raise ValueError('No existe el registro que se desea corregir.')
+                    raise AvisoUsuario('No se encontró la ficha que deseas corregir. Actualiza la lista e inténtalo de nuevo.')
                 if self.huella_registro(
                     actual['marca_marcxml'], actual['marca_iso2709'],
                 ) != huella_original:
-                    raise ValueError(
+                    raise AvisoUsuario(
                         'El registro cambió desde que se abrió para revisión. '
                         'Actualiza la vista y vuelve a proponer la corrección.'
                     )
@@ -494,9 +496,9 @@ class MySQLWriter:
                     (lote_id, id_ficha),
                 )
                 if cur.fetchone() is not None:
-                    raise ValueError(
+                    raise AvisoUsuario(
                         'Ya hay una corrección pendiente para esta ficha. '
-                        'Espera a que Aprobación la resuelva.'
+                        'Espera a que se apruebe o rechace antes de enviar otra.'
                     )
                 cur.execute(
                     'INSERT INTO correcciones_marc '
@@ -534,7 +536,9 @@ class MySQLWriter:
             return cur.fetchall()
 
     def resolver_correccion(self, propuesta_id, lote_id, usuario,
-                            aprobar):
+                            aprobar, *, perfil_actual=None):
+        # El perfil viene de la sesión, nunca del autor o del contenido de la propuesta.
+        requerir_permiso(perfil_actual, 'aprobar_correccion' if aprobar else 'rechazar_correccion')
         estado_final = 'APROBADA' if aprobar else 'RECHAZADA'
         self.conn.begin()
         try:
@@ -548,13 +552,14 @@ class MySQLWriter:
                 )
                 propuesta = cur.fetchone()
                 if propuesta is None:
-                    raise ValueError(
-                        'La propuesta no existe, ya fue resuelta o pertenece a otro lote.'
+                    raise AvisoUsuario(
+                        'Esta corrección ya no está pendiente en este lote. Actualiza la lista de propuestas.'
                     )
-                if propuesta['propuesto_por'] == usuario:
-                    raise ValueError(
-                        'La persona que propuso la corrección no puede aprobarla ni rechazarla.'
-                    )
+                motivo = motivo_bloqueo_correccion(
+                    perfil_actual, usuario, propuesta['propuesto_por'], aprobar,
+                )
+                if motivo:
+                    raise AvisoUsuario(motivo)
                 if aprobar:
                     # Antes de aplicar, se valida el formato y que el original siga intacto.
                     registro_propuesto = self._validar_registro_propuesto(
@@ -570,9 +575,9 @@ class MySQLWriter:
                     if actual is None or self.huella_registro(
                         actual['marca_marcxml'], actual['marca_iso2709'],
                     ) != propuesta['huella_original']:
-                        raise ValueError(
-                            'El registro cambió después de la propuesta. '
-                            'No se aplicó la corrección; debe revisarse de nuevo.'
+                        raise AvisoUsuario(
+                            'La ficha cambió después de enviar la propuesta. '
+                            'Revisa la versión actual antes de proponer otra corrección.'
                         )
                     id_control = registro_propuesto['001'].data
                     cur.execute(

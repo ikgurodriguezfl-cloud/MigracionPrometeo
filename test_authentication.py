@@ -82,8 +82,9 @@ class AuthenticationTests(unittest.TestCase):
         token_admin = self.service.authenticate('admin', 'correcta-123')
         self.assertEqual(self.service.get_profile(token_admin), 'Administracion')
 
-    def test_aprobacion_y_administracion_comparten_permisos_salvo_gestion_usuarios(self):
-        operaciones = set(MATRIZ_PERMISOS) - {'gestionar_usuarios'}
+    def test_administracion_agrega_gestion_de_usuarios_y_aprobacion_propia(self):
+        exclusivos = {'gestionar_usuarios', 'aprobar_correccion_propia'}
+        operaciones = set(MATRIZ_PERMISOS) - exclusivos
 
         for operacion in operaciones:
             with self.subTest(operacion=operacion):
@@ -92,8 +93,9 @@ class AuthenticationTests(unittest.TestCase):
                     tiene_permiso('Administracion', operacion),
                 )
 
-        self.assertFalse(tiene_permiso('Aprobacion', 'gestionar_usuarios'))
-        self.assertTrue(tiene_permiso('Administracion', 'gestionar_usuarios'))
+        for operacion in exclusivos:
+            self.assertFalse(tiene_permiso('Aprobacion', operacion))
+            self.assertTrue(tiene_permiso('Administracion', operacion))
 
     def test_ejecucion_revision_y_aprobacion_pueden_ver_incidencias_y_reportes(self):
         for perfil in ('Ejecucion', 'Revision', 'Aprobacion', 'Administracion'):

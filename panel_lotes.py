@@ -19,6 +19,7 @@ from xml.etree import ElementTree
 from pymarc import Field, JSONReader, MARCReader, Record, Subfield, parse_xml_to_array
 from marc_converter import MarcConverter
 from mysql_writer import MySQLWriter
+from avisos import AvisoUsuario, mensaje_error
 from validacion_marc import (ERROR as ERROR_MARC, estado_ficha, es_repetible, fuente_catalogacion_008, inspeccionar_copias,
                              validar_ficha)
 
@@ -432,7 +433,7 @@ def record_para_edicion(registro):
             try:
                 copias = parse_xml_to_array(StringIO(registro['marca_marcxml']), strict=True)
                 if len(copias) == 1 and copias[0].as_dict() != iso.as_dict():
-                    return copias[0], 'Las copias difieren. Estás editando el MARCXML mostrado; comprueba sus campos contra el origen.'
+                    return copias[0], 'Las versiones guardadas de la ficha son distintas. Compara los datos que estás editando con el respaldo original.'
             except (SAXException, ValueError, TypeError, UnicodeError):
                 pass
         return iso, ''
@@ -446,8 +447,7 @@ def record_para_edicion(registro):
         if len(registros) != 1:
             raise ValueError('El MARCXML no contiene exactamente un registro.')
         return registros[0], (
-            'Aviso: la copia ISO2709 no se pudo leer; los campos se '
-            'recuperaron desde MARCXML.'
+            'Una versión guardada de la ficha no se pudo leer. Los campos se recuperaron de otra copia; revísalos antes de guardar.'
         )
     except (ValueError, TypeError, UnicodeError, SAXException) as exc:
         errores.append(f'MARCXML: {exc}')
@@ -456,8 +456,7 @@ def record_para_edicion(registro):
     record.leader = '00000nam a2200000 i 4500'
     return record, (
         'Aviso: no se pudo recuperar ninguna copia del registro. Se abrió '
-        'una ficha vacía para capturar todos los campos MARC obligatorios. '
-        + ' '.join(errores)
+        'una ficha vacía. Completa los campos obligatorios con los datos del respaldo original.'
     )
 
 
@@ -487,7 +486,7 @@ def parsear_subcampos(texto):
     for parte in partes:
         coincidencia = re.fullmatch(r'\$([a-z0-9])\s+(.+)', parte.strip(), re.DOTALL)
         if not coincidencia:
-            raise ValueError('Cada subcampo requiere código y contenido: «$a valor | $b valor».')
+            raise AvisoUsuario('Escribe el código y el contenido de cada parte, por ejemplo: «$a Título | $b Subtítulo».')
         resultado.append(Subfield(coincidencia[1], coincidencia[2]))
     return resultado
 
@@ -495,16 +494,16 @@ def parsear_subcampos(texto):
 def campo_desde_editor(tag, indicadores, contenido):
     tag = tag.strip()
     if not re.fullmatch(r'[0-9]{3}', tag):
-        raise ValueError('La etiqueta MARC debe contener tres dígitos.')
+        raise AvisoUsuario('Escribe un número de campo de tres dígitos, por ejemplo: 245.')
     if tag < '010':
         if not contenido.strip():
-            raise ValueError(f'El campo de control {tag} requiere contenido.')
+            raise AvisoUsuario(f'Completa el contenido del campo {tag}.')
         if indicadores.strip():
-            raise ValueError('Los campos de control no llevan indicadores.')
+            raise AvisoUsuario('Deja vacía la casilla de indicadores para los campos del 001 al 009.')
         return Field(tag=tag, data=contenido)
     indicadores = indicadores.replace('#', ' ')
     if len(indicadores) != 2 or any(ord(char) < 32 for char in indicadores):
-        raise ValueError('Un campo de datos requiere exactamente dos indicadores.')
+        raise AvisoUsuario('Escribe los dos indicadores del campo. Usa un espacio o # cuando no tenga valor.')
     return Field(
         tag=tag, indicators=list(indicadores),
         subfields=parsear_subcampos(contenido),
@@ -642,10 +641,6 @@ class PanelLotes(ttk.Frame):
         ttk.Label(
             cabecera, text='Panel de migraciones', style='Titulo.Panel.TLabel',
         ).grid(row=0, column=0, sticky='w')
-        ttk.Label(
-            cabecera, text='Estado general de los lotes y acciones rápidas.',
-            style='CardHint.TLabel',
-        ).grid(row=1, column=0, sticky='w', pady=(ESPACIO_XS, 0))
         acciones_cabecera = ttk.Frame(cabecera, style='Tarjeta.TFrame')
         acciones_cabecera.grid(row=0, column=1, rowspan=2, sticky='e')
         ttk.Button(
@@ -1122,7 +1117,7 @@ class PanelLotes(ttk.Frame):
                 resultado = self.bloqueos_anteriores(lote.id)
             except (OSError, ValueError, sqlite3.Error) as exc:
                 self.publicar(self._conteos_anteriores.pop, lote.id, None)
-                self.publicar(messagebox.showerror, 'Consulta del historial', str(exc))
+                self.publicar(messagebox.showerror, 'Consulta del historial', mensaje_error(exc, 'No se pudo consultar el historial. Vuelve a intentarlo; si continúa el problema, pide ayuda al administrador.'))
             else:
                 self.publicar(mostrar, resultado)
         Thread(target=consultar, daemon=True).start()
@@ -1330,7 +1325,7 @@ class PanelLotes(ttk.Frame):
                 parent=self,
             )
         except OSError as exc:
-            messagebox.showerror('No se pudo exportar el historial', str(exc), parent=self)
+            messagebox.showerror('No se pudo exportar el historial', mensaje_error(exc, 'No se pudo guardar el historial. Elige una carpeta donde puedas guardar archivos y comprueba el espacio disponible.'), parent=self)
 
     def seleccionar_real(self, identificador):
         self.demo.set(False)
@@ -1524,7 +1519,7 @@ class PanelLotes(ttk.Frame):
                 return
         except Exception as exc:
             messagebox.showerror(
-                'No se pudieron consultar los registros', str(exc), parent=self,
+                'No se pudieron consultar los registros', mensaje_error(exc, 'No se pudieron cargar las fichas. Revisa la conexión del lote e inténtalo de nuevo.'), parent=self,
             )
             return
 
@@ -1979,7 +1974,7 @@ class PanelLotes(ttk.Frame):
                 except Exception as exc:
                     messagebox.showerror(
                         'No se pudieron consultar las observaciones',
-                        str(exc), parent=dialogo,
+                        mensaje_error(exc, 'No se pudieron cargar las observaciones. Revisa la conexión e inténtalo de nuevo.'), parent=dialogo,
                     )
                     return False
                 tabla_notas.delete(*tabla_notas.get_children())
@@ -2015,7 +2010,7 @@ class PanelLotes(ttk.Frame):
                     )
                 except Exception as exc:
                     messagebox.showerror(
-                        'No se pudo guardar la observación', str(exc),
+                        'No se pudo guardar la observación', mensaje_error(exc, 'No se pudo guardar la observación. Revisa la conexión y vuelve a intentarlo.'),
                         parent=dialogo,
                     )
                     return
@@ -2052,16 +2047,15 @@ class PanelLotes(ttk.Frame):
             except Exception as exc:
                 messagebox.showerror(
                     'No se pudo proponer la reparación',
-                    f'No se pudo regenerar el MARCXML desde ISO2709. '
-                    f'Revisa o completa los campos manualmente: {exc}',
+                    mensaje_error(exc, 'No se pudo recuperar la ficha automáticamente. Abre la opción de corregir y revisa o completa sus campos.'),
                     parent=ventana,
                 )
                 return
             messagebox.showinfo(
                 'Reparación pendiente',
-                f'La reparación MARCXML de la ficha '
+                f'La corrección de la ficha '
                 f'{registro["id_ficha_acceso"]} quedó como propuesta '
-                f'#{propuesta_id}. Aprobación debe revisarla y aplicarla.',
+                f'#{propuesta_id}. Quedará guardada cuando se apruebe.',
                 parent=ventana,
             )
             cargar_pagina(inicio_pagina)
@@ -2242,7 +2236,7 @@ class PanelLotes(ttk.Frame):
                     campo = campo_validado()
                     campos_editables.append(campo)
                 except ValueError as exc:
-                    messagebox.showerror('Campo no válido', str(exc), parent=editor)
+                    messagebox.showerror('Campo no válido', mensaje_error(exc, 'Revisa el número del campo, sus indicadores y su contenido antes de guardarlo.'), parent=editor)
                     return
                 presentar_campos(len(campos_editables) - 1)
 
@@ -2250,14 +2244,14 @@ class PanelLotes(ttk.Frame):
                 seleccion = tabla_edicion.selection()
                 if not seleccion:
                     messagebox.showwarning(
-                        'Selecciona un campo', 'Selecciona un campo MARC para actualizar.',
+                        'Selecciona un campo', 'Selecciona el campo de la ficha que deseas cambiar.',
                         parent=editor,
                     )
                     return
                 try:
                     campo = campo_validado(int(seleccion[0]))
                 except ValueError as exc:
-                    messagebox.showerror('Campo no válido', str(exc), parent=editor)
+                    messagebox.showerror('Campo no válido', mensaje_error(exc, 'Revisa el número del campo, sus indicadores y su contenido antes de guardarlo.'), parent=editor)
                     return
                 indice = int(seleccion[0])
                 campos_editables[indice] = campo
@@ -2315,7 +2309,7 @@ class PanelLotes(ttk.Frame):
                         if pendiente != activo and str(pendiente) != str(activo):
                             raise ValueError('Pulsa Actualizar campo antes de enviar los cambios.')
                     except ValueError as exc:
-                        messagebox.showwarning('Campo pendiente', str(exc), parent=editor)
+                        messagebox.showwarning('Campo pendiente', mensaje_error(exc, 'Revisa el campo que estás editando antes de enviar la corrección.'), parent=editor)
                         return
                 elif tag_var.get().strip() or contenido_editor.get('1.0', 'end-1c').strip():
                     messagebox.showwarning('Campo pendiente', 'Pulsa Agregar campo antes de enviar.', parent=editor)
@@ -2328,14 +2322,14 @@ class PanelLotes(ttk.Frame):
                     )
                 except Exception as exc:
                     messagebox.showerror(
-                        'No se pudo proponer la corrección', str(exc), parent=editor,
+                        'No se pudo proponer la corrección', mensaje_error(exc, 'No se pudo enviar la corrección. Pulsa «Validar ficha» para revisar los campos y comprueba la conexión antes de volver a intentarlo.'), parent=editor,
                     )
                     return
                 cerrar_pagina_auxiliar('editor', pagina_editor)
                 messagebox.showinfo(
                     'Corrección pendiente',
                     f'La propuesta #{propuesta_id} quedó pendiente de revisión '
-                    'por un usuario con perfil Aprobación. No se modificó aún el registro.',
+                    'y aprobación. La ficha conservará sus datos actuales hasta que se apruebe.',
                     parent=ventana,
                 )
                 cargar_pagina(inicio_pagina)
@@ -2345,10 +2339,19 @@ class PanelLotes(ttk.Frame):
             def validar_edicion():
                 try:
                     issues = validar_ficha(registro_editado(), perfil)
-                    mensaje = '\n'.join(i.texto() for i in issues) or 'La ficha está lista para exportar.'
+                    errores = [i for i in issues if i.gravedad == ERROR_MARC]
+                    campos = ', '.join(dict.fromkeys(i.campo for i in issues if i.campo))
+                    if errores:
+                        mensaje = 'La ficha necesita correcciones antes de guardarse o exportarse.'
+                    elif issues:
+                        mensaje = 'La ficha se puede exportar, pero hay datos que conviene revisar.'
+                    else:
+                        mensaje = 'La ficha está lista para exportar.'
+                    if campos:
+                        mensaje += f'\n\nRevisa estos campos: {campos}.'
                     messagebox.showinfo(estado_ficha(issues), mensaje, parent=editor)
                 except ValueError as exc:
-                    messagebox.showerror('Leader no válido', str(exc), parent=editor)
+                    messagebox.showerror('Cabecera no válida', mensaje_error(exc, 'Revisa los datos de la cabecera de la ficha antes de continuar.'), parent=editor)
             ttk.Button(barra_editor, text='Validar ficha', command=validar_edicion).pack(side='left')
             fijo = record.get('008')
             if fijo and len(fijo.data or '') == 40 and fuente_catalogacion_008(fijo.data[39]) != fijo.data[39]:
@@ -2389,7 +2392,7 @@ class PanelLotes(ttk.Frame):
                 propuestas = self.listar_propuestas(lote.id)
             except Exception as exc:
                 messagebox.showerror(
-                    'No se pudieron consultar las propuestas', str(exc),
+                    'No se pudieron consultar las propuestas', mensaje_error(exc, 'No se pudieron cargar las correcciones pendientes. Revisa la conexión e inténtalo de nuevo.'),
                     parent=ventana,
                 )
                 return
@@ -2470,6 +2473,8 @@ class PanelLotes(ttk.Frame):
             estado_propuesta.grid(row=3, column=0, sticky='ew', padx=14)
 
             def pintar_propuesta(_evento=None):
+                boton_aprobar.configure(state='disabled')
+                boton_rechazar.configure(state='disabled')
                 seleccion = propuesta_tabla.selection()
                 if not seleccion:
                     return
@@ -2496,7 +2501,7 @@ class PanelLotes(ttk.Frame):
                     ]
                 except ValueError as exc:
                     messagebox.showerror(
-                        'Propuesta inválida', str(exc), parent=revision,
+                        'Propuesta inválida', mensaje_error(exc, 'No se pudieron leer los cambios de esta propuesta. Actualiza la revisión; si continúa el problema, pide ayuda al administrador.'), parent=revision,
                     )
                     return
                 cambios_versiones = cambios_propuesta(*campos_versiones)
@@ -2517,11 +2522,15 @@ class PanelLotes(ttk.Frame):
                     tabla.yview_moveto(0)
                     if primera_diferencia is not None:
                         tabla.see(primera_diferencia)
+                boton_aprobar.configure(state='normal' if propuesta.get('puede_aprobar', False) else 'disabled')
+                boton_rechazar.configure(state='normal' if propuesta.get('puede_rechazar', False) else 'disabled')
+                aviso = propuesta.get('motivo_aprobar') or propuesta.get('motivo_rechazar') or ''
                 estado_propuesta.config(
                     text=f'Propuesta #{propuesta["id"]} · ficha '
                          f'{propuesta["id_ficha_acceso"]} · autor: '
                          f'{propuesta["propuesto_por"]}. Al aprobar se actualizará '
-                         'MARCXML, ISO2709 y el estado del registro.',
+                         'la ficha con estos cambios.' + (f'\n{aviso}' if aviso else ''),
+                    wraplength=850,
                 )
 
             def resolver_seleccion(aprobar):
@@ -2534,10 +2543,19 @@ class PanelLotes(ttk.Frame):
                     )
                     return
                 propuesta_id = int(seleccion[0])
+                propuesta = next(p for p in propuestas if p['id'] == propuesta_id)
+                accion = 'aprobar' if aprobar else 'rechazar'
+                if not propuesta.get(f'puede_{accion}', False):
+                    messagebox.showwarning(
+                        'Se necesita otra persona para revisar',
+                        propuesta.get(f'motivo_{accion}') or 'Actualiza la lista de propuestas para comprobar tus permisos.',
+                        parent=revision,
+                    )
+                    return
                 if not messagebox.askyesno(
                     'Confirmar decisión',
-                    '¿Aprobar y aplicar esta corrección en MySQL?'
-                    if aprobar else '¿Rechazar esta propuesta de corrección?',
+                    '¿Aprobar esta corrección y guardar los cambios en la ficha?'
+                    if aprobar else '¿Rechazar esta corrección? La ficha conservará sus datos actuales.',
                     parent=revision,
                 ):
                     return
@@ -2545,7 +2563,7 @@ class PanelLotes(ttk.Frame):
                     self.resolver_propuesta(lote.id, propuesta_id, aprobar)
                 except Exception as exc:
                     messagebox.showerror(
-                        'No se pudo resolver la corrección', str(exc),
+                        'No se pudo resolver la corrección', mensaje_error(exc, 'No se pudo guardar la decisión. Actualiza la lista de propuestas y comprueba la conexión antes de volver a intentarlo.'),
                         parent=revision,
                     )
                     return
@@ -2563,14 +2581,16 @@ class PanelLotes(ttk.Frame):
                     'propuestas', pagina_propuestas,
                 ),
             ).pack(side='right')
-            ttk.Button(
+            boton_rechazar = ttk.Button(
                 botonera, text='Rechazar', command=lambda: resolver_seleccion(False),
-            ).pack(side='right', padx=(0, 8))
-            ttk.Button(
+            )
+            boton_rechazar.pack(side='right', padx=(0, 8))
+            boton_aprobar = ttk.Button(
                 botonera, text='Aprobar y aplicar',
                 style='Primary.TButton',
                 command=lambda: resolver_seleccion(True),
-            ).pack(side='right', padx=(0, 8))
+            )
+            boton_aprobar.pack(side='right', padx=(0, 8))
             propuesta_tabla.selection_set(str(propuestas[0]['id']))
             pintar_propuesta()
 
@@ -2587,7 +2607,7 @@ class PanelLotes(ttk.Frame):
                     raise ValueError('El lote no contiene registros para esta página.')
             except Exception as exc:
                 messagebox.showerror(
-                    'No se pudieron consultar los registros', str(exc),
+                    'No se pudieron consultar los registros', mensaje_error(exc, 'No se pudieron cargar las fichas. Revisa la conexión del lote e inténtalo de nuevo.'),
                     parent=ventana,
                 )
                 return
@@ -2677,7 +2697,7 @@ class PanelLotes(ttk.Frame):
                         return
                     boton_ir.state(['!disabled'])
                     if error:
-                        messagebox.showerror('Ir a ficha', error, parent=ventana)
+                        messagebox.showerror('Ir a ficha', mensaje_error(error, 'No se pudo buscar la ficha. Comprueba el número e inténtalo de nuevo.'), parent=ventana)
                     elif posicion is None:
                         messagebox.showinfo('Ir a ficha', f'La ficha {ficha} no figura entre las convertidas de este lote.', parent=ventana)
                     else:
@@ -2771,6 +2791,6 @@ class PanelLotes(ttk.Frame):
                 escribir_reporte_lote(ruta, detalle, demostracion)
                 self.publicar(messagebox.showinfo, 'Reporte guardado', 'Se guardó el reporte del lote.')
             except Exception as exc:
-                self.publicar(messagebox.showerror, 'No se pudo guardar el reporte', str(exc))
+                self.publicar(messagebox.showerror, 'No se pudo guardar el reporte', mensaje_error(exc, 'No se pudo guardar el reporte. Elige una carpeta donde puedas guardar archivos y comprueba el espacio disponible.'))
 
         Thread(target=guardar, daemon=True).start()
